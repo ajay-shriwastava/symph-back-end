@@ -4,5 +4,6 @@ from app.models.log import Log
 from app.models.memory import AgentMemory
 from app.models.message import Message
 from app.models.workflow import Workflow
+from app.models.workflow_run import WorkflowRun
 
-__all__ = ["Agent", "Workflow", "Message", "Log", "AgentMemory"]
+__all__ = ["Agent", "Workflow", "WorkflowRun", "Message", "Log", "AgentMemory"]

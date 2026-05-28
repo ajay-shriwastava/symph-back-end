@@ -8,12 +8,14 @@ from pydantic import BaseModel, Field
 class WorkflowCreate(BaseModel):
     name: str = Field(..., max_length=255)
     description: Optional[str] = None
+    status: str = Field(default="draft", max_length=20)
     graph_definition: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
+    status: Optional[str] = Field(default=None, max_length=20)
     graph_definition: Optional[Dict[str, Any]] = None
 
 
@@ -21,6 +23,7 @@ class WorkflowOut(BaseModel):
     id: UUID
     name: str
     description: Optional[str]
+    status: str
     graph_definition: Dict[str, Any]
     created_at: datetime
     updated_at: Optional[datetime]
