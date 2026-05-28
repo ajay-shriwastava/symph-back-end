@@ -20,7 +20,11 @@ class Agent(Base):
         String(100), nullable=False, server_default="claude-sonnet-4-6"
     )
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role_persona: Mapped[str | None] = mapped_column(Text, nullable=True)
     tools: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    channels: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     memory_enabled: Mapped[bool] = mapped_column(
