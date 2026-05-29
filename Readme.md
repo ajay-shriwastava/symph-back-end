@@ -105,3 +105,15 @@ Auth is currently a stub — any non-empty token is accepted.
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost/symphony` | PostgreSQL async connection string |
+| `ANTHROPIC_API_KEY` | — | Required. Anthropic API key for Claude models |
+| `SLACK_BOT_TOKEN` | — | Slack bot token (`xoxb-...`) for Socket Mode |
+| `SLACK_APP_TOKEN` | — | Slack app-level token (`xapp-...`) for Socket Mode |
+| `LANGCHAIN_TRACING_V2` | `false` | Set to `true` to enable LangSmith tracing |
+| `LANGCHAIN_API_KEY` | — | LangSmith API key (get at smith.langchain.com) |
+| `LANGCHAIN_PROJECT` | — | LangSmith project name (e.g. `symphony`) |
+
+## Observability
+
+Symphony uses [LangSmith](https://smith.langchain.com) for deep LLM tracing. When `LANGCHAIN_TRACING_V2=true` is set, every workflow run and Slack message is automatically traced — including full prompt/response, token counts, cost, and per-node latency.
+
+All run events are also persisted to the local `logs` table and visible in the Symphony UI under **Logs**.

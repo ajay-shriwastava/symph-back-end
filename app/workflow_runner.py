@@ -10,6 +10,7 @@ State keys:
 """
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -20,6 +21,29 @@ from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ws_manager import manager
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Pricing (per million tokens: input_rate, output_rate in USD)
+# ---------------------------------------------------------------------------
+
+_PRICING: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5":  (0.80,  4.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-6":  (15.00, 75.00),
+}
+
+def _estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    for prefix, (in_rate, out_rate) in _PRICING.items():
+        if prefix in model_id:
+            return round((input_tokens * in_rate + output_tokens * out_rate) / 1_000_000, 6)
+    return round((input_tokens * 3.00 + output_tokens * 15.00) / 1_000_000, 6)
+
+
+def _zero_usage() -> dict:
+    return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0}
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +56,29 @@ def _now_iso() -> str:
 
 async def _broadcast(run_id: str, event: dict) -> None:
     await manager.broadcast(run_id, event)
+
+
+async def _write_log(
+    level: str,
+    message: str,
+    workflow_id: str | None = None,
+    agent_id: str | None = None,
+) -> None:
+    from app.database import AsyncSessionLocal
+    from app.models.log import Log
+    try:
+        async with AsyncSessionLocal() as db:
+            log = Log(
+                id=uuid.uuid4(),
+                level=level,
+                message=message,
+                workflow_id=uuid.UUID(workflow_id) if workflow_id else None,
+                agent_id=uuid.UUID(agent_id) if agent_id else None,
+            )
+            db.add(log)
+            await db.commit()
+    except Exception as exc:
+        logger.warning("Failed to persist log: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +106,18 @@ def _make_end_node(run_id: str):
 MAX_LOOPS = 5  # max times a feedback loop may repeat before forcing exit
 
 
-def _make_agent_node(node_id: str, system_prompt: str, run_id: str):
+def _make_agent_node(
+    node_id: str,
+    system_prompt: str,
+    model_id: str,
+    run_id: str,
+    workflow_id: str | None = None,
+    agent_id_str: str | None = None,
+):
     async def agent_node(state: dict) -> dict:
         await _broadcast(run_id, {"event": "node_enter", "node_id": node_id, "ts": _now_iso()})
-        llm = ChatAnthropic(model="claude-haiku-4-5-20251001")
+        await _write_log("INFO", f"Node '{node_id}' started (model: {model_id})", workflow_id, agent_id_str)
+        llm = ChatAnthropic(model=model_id)
         messages_in = [SystemMessage(content=system_prompt or "You are a helpful assistant.")]
         history = state.get("messages", [])
         if history:
@@ -72,13 +127,39 @@ def _make_agent_node(node_id: str, system_prompt: str, run_id: str):
         result = await llm.ainvoke(messages_in)
         text = result.content if hasattr(result, "content") else str(result)
         new_messages = list(history) + [text]
+
+        # Capture token usage
+        usage_meta = getattr(result, "usage_metadata", None) or {}
+        in_tok = usage_meta.get("input_tokens", 0)
+        out_tok = usage_meta.get("output_tokens", 0)
+        node_cost = _estimate_cost(model_id, in_tok, out_tok)
+        node_usage = {"input_tokens": in_tok, "output_tokens": out_tok, "cost_usd": round(node_cost, 6)}
+
+        # Accumulate run-level usage
+        prev = state.get("usage") or _zero_usage()
+        new_usage = {
+            "input_tokens": prev["input_tokens"] + in_tok,
+            "output_tokens": prev["output_tokens"] + out_tok,
+            "total_tokens": prev["input_tokens"] + in_tok + prev["output_tokens"] + out_tok,
+            "estimated_cost_usd": round(prev["estimated_cost_usd"] + node_cost, 6),
+        }
+
         output = {"text": text}
-        await _broadcast(run_id, {"event": "node_complete", "node_id": node_id, "output": output, "ts": _now_iso()})
+        await _broadcast(run_id, {
+            "event": "node_complete", "node_id": node_id,
+            "output": output, "usage": node_usage, "ts": _now_iso(),
+        })
+        await _write_log(
+            "INFO",
+            f"Node '{node_id}' completed — ↑{in_tok} ↓{out_tok} tokens, ${node_cost:.4f}",
+            workflow_id,
+            agent_id_str,
+        )
         loop_count = state.get("loop_count", 0) + 1
         # After MAX_LOOPS passes set condition_result=True so the condition exits the loop
         condition_result = True if loop_count >= MAX_LOOPS else state.get("condition_result", False)
         return {**state, "messages": new_messages, "current_output": text,
-                "loop_count": loop_count, "condition_result": condition_result}
+                "loop_count": loop_count, "condition_result": condition_result, "usage": new_usage}
 
     return agent_node
 
@@ -111,6 +192,7 @@ class WorkflowRunner:
         graph_definition: Dict[str, Any],
         agents_map: Dict[str, Any],
         run_id: str,
+        workflow_id: str | None = None,
     ) -> StateGraph:
         """
         Compile graph_definition into a LangGraph StateGraph.
@@ -150,13 +232,25 @@ class WorkflowRunner:
                 agent_id = node.get("agent_id")
                 agent_obj = agents_map.get(str(agent_id)) if agent_id else None
                 system_prompt = ""
+                model_id = "claude-haiku-4-5-20251001"
                 if agent_obj:
                     system_prompt = (
                         agent_obj.system_prompt
                         if hasattr(agent_obj, "system_prompt")
                         else agent_obj.get("system_prompt", "")
                     ) or ""
-                graph.add_node(nid, _make_agent_node(nid, system_prompt, run_id))
+                    agent_model = (
+                        agent_obj.model
+                        if hasattr(agent_obj, "model")
+                        else agent_obj.get("model", "")
+                    ) or ""
+                    if agent_model:
+                        model_id = agent_model
+                graph.add_node(nid, _make_agent_node(
+                    nid, system_prompt, model_id, run_id,
+                    workflow_id=workflow_id,
+                    agent_id_str=str(agent_id) if agent_id else None,
+                ))
             elif ntype == "condition":
                 graph.add_node(nid, _make_condition_node(nid, run_id))
 
@@ -229,8 +323,9 @@ async def run_workflow(
             status="running",
             started_at=datetime.now(timezone.utc),
         )
+        await _write_log("INFO", f"Workflow run {run_id} started", workflow_id)
 
-        compiled = WorkflowRunner.compile(graph_definition, agents_map, run_id)
+        compiled = WorkflowRunner.compile(graph_definition, agents_map, run_id, workflow_id)
         app_graph = compiled.compile()
 
         initial_state = {
@@ -239,26 +334,40 @@ async def run_workflow(
             "condition_result": input_data.get("condition_result", False),
             "loop_count": 0,
             "run_id": run_id,
+            "usage": _zero_usage(),
         }
 
         final_state = await app_graph.ainvoke(
             initial_state,
             config={"recursion_limit": MAX_LOOPS * 10 + 20},
         )
-        output = {"messages": final_state.get("messages", []), "current_output": final_state.get("current_output")}
+        final_usage = final_state.get("usage") or _zero_usage()
+        output = {
+            "messages": final_state.get("messages", []),
+            "current_output": final_state.get("current_output"),
+            "usage": final_usage,
+        }
 
         await _update_run(
             status="completed",
             output=output,
+            usage=final_usage,
             finished_at=datetime.now(timezone.utc),
         )
         await _broadcast(
             run_id,
-            {"event": "run_complete", "status": "completed", "output": output, "ts": _now_iso()},
+            {"event": "run_complete", "status": "completed", "output": output, "usage": final_usage, "ts": _now_iso()},
+        )
+        await _write_log(
+            "INFO",
+            f"Workflow run {run_id} completed — "
+            f"{final_usage['total_tokens']} tokens, ${final_usage['estimated_cost_usd']:.4f}",
+            workflow_id,
         )
 
     except Exception as exc:
         error_msg = str(exc)
+        await _write_log("ERROR", f"Workflow run {run_id} failed: {error_msg}", workflow_id)
         await _update_run(
             status="failed",
             error=error_msg,

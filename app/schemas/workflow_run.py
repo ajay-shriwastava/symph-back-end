@@ -16,6 +16,7 @@ class WorkflowRunOut(BaseModel):
     input: Optional[Dict[str, Any]]
     output: Optional[Dict[str, Any]]
     error: Optional[str]
+    usage: Optional[Dict[str, Any]]
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
     created_at: datetime
