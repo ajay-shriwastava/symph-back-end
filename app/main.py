@@ -1,11 +1,26 @@
+from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import agents, logs, messages, workflows
+from app.routers.agent_config import router as agent_config_router
 from app.routers.workflow_runs import router as workflow_runs_router
 from app.routers.workflow_runs import ws_router as workflow_runs_ws_router
+from app.slack_bot import start_slack_bot, stop_slack_bot
 
-app = FastAPI(title="Symphony API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await start_slack_bot()
+    yield
+    await stop_slack_bot()
+
+
+app = FastAPI(title="Symphony API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +31,7 @@ app.add_middleware(
 )
 
 app.include_router(agents.router)
+app.include_router(agent_config_router)
 app.include_router(workflows.router)
 app.include_router(messages.router)
 app.include_router(logs.router)
