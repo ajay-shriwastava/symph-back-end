@@ -103,7 +103,7 @@ def _make_end_node(run_id: str):
     return end_node
 
 
-MAX_LOOPS = 5  # max times a feedback loop may repeat before forcing exit
+MAX_LOOPS = 20  # max times a feedback loop may repeat before forcing exit
 
 
 def _make_agent_node(
@@ -113,29 +113,101 @@ def _make_agent_node(
     run_id: str,
     workflow_id: str | None = None,
     agent_id_str: str | None = None,
+    agent_obj=None,
+    max_loops: int = MAX_LOOPS,
 ):
+    """
+    Build an agent node. When agent_obj is provided and has tools configured,
+    uses create_react_agent for a real ReAct loop with tool calling.
+    Falls back to a simple single-turn LLM call otherwise.
+    """
     async def agent_node(state: dict) -> dict:
         await _broadcast(run_id, {"event": "node_enter", "node_id": node_id, "ts": _now_iso()})
-        await _write_log("INFO", f"Node '{node_id}' started (model: {model_id})", workflow_id, agent_id_str)
-        llm = ChatAnthropic(model=model_id)
-        messages_in = [SystemMessage(content=system_prompt or "You are a helpful assistant.")]
-        history = state.get("messages", [])
-        if history:
-            messages_in.append(HumanMessage(content="\n".join(str(m) for m in history)))
-        else:
-            messages_in.append(HumanMessage(content="Begin."))
-        result = await llm.ainvoke(messages_in)
-        text = result.content if hasattr(result, "content") else str(result)
-        new_messages = list(history) + [text]
 
-        # Capture token usage
-        usage_meta = getattr(result, "usage_metadata", None) or {}
+        resolved_system = system_prompt or ""
+        resolved_model = model_id or "claude-haiku-4-5-20251001"
+        bound_tools: list = []
+
+        if agent_obj is not None:
+            from app.tools import TOOL_REGISTRY
+            from app.models.memory import AgentMemory
+            from sqlalchemy import select as sa_select
+            from app.database import AsyncSessionLocal
+
+            agent_id = getattr(agent_obj, "id", None)
+
+            # Load memory if enabled
+            memory_enabled = (
+                agent_obj.memory_enabled
+                if hasattr(agent_obj, "memory_enabled")
+                else agent_obj.get("memory_enabled", False)
+            )
+            if memory_enabled and agent_id:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        rows = (await db.execute(
+                            sa_select(AgentMemory).where(AgentMemory.agent_id == agent_id)
+                        )).scalars().all()
+                        if rows:
+                            mem_text = "\n".join(f"{r.key}: {r.value}" for r in rows)
+                            resolved_system += f"\n\nYour current memory:\n{mem_text}"
+                except Exception as exc:
+                    logger.warning("Could not load agent memory: %s", exc)
+
+            # Apply guardrails
+            guardrails = (
+                agent_obj.guardrails
+                if hasattr(agent_obj, "guardrails")
+                else agent_obj.get("guardrails", {})
+            ) or {}
+            restricted = guardrails.get("restricted_topics", [])
+            if restricted:
+                resolved_system += f"\n\nDo NOT discuss: {', '.join(restricted)}."
+
+            # Bind tools listed in agent.tools
+            tool_names: list = (
+                agent_obj.tools
+                if hasattr(agent_obj, "tools")
+                else agent_obj.get("tools", [])
+            ) or []
+            bound_tools = [TOOL_REGISTRY[t] for t in tool_names if t in TOOL_REGISTRY]
+
+            log_msg = f"Node '{node_id}' started (model: {resolved_model}"
+            log_msg += f", tools: {tool_names})" if tool_names else ")"
+            await _write_log("INFO", log_msg, workflow_id, agent_id_str)
+        else:
+            await _write_log("INFO", f"Node '{node_id}' started (model: {resolved_model})", workflow_id, agent_id_str)
+
+        llm = ChatAnthropic(model=resolved_model)
+        history = state.get("messages", [])
+        user_input = history[-1] if history else state.get("input", "Begin.")
+
+        messages_in = [SystemMessage(content=resolved_system or "You are a helpful assistant.")]
+        messages_in.append(HumanMessage(content=str(user_input)))
+
+        # ReAct loop when tools are bound; otherwise single-turn
+        if bound_tools:
+            from langgraph.prebuilt import create_react_agent
+            from langchain_core.messages import AIMessage
+            react_agent = create_react_agent(llm, bound_tools)
+            react_result = await react_agent.ainvoke({"messages": messages_in})
+            final_msg = next(
+                (m for m in reversed(react_result["messages"])
+                 if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)),
+                react_result["messages"][-1],
+            )
+            text = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+            usage_meta = getattr(final_msg, "usage_metadata", None) or {}
+        else:
+            result = await llm.ainvoke(messages_in)
+            text = result.content if hasattr(result, "content") else str(result)
+            usage_meta = getattr(result, "usage_metadata", None) or {}
+
         in_tok = usage_meta.get("input_tokens", 0)
         out_tok = usage_meta.get("output_tokens", 0)
-        node_cost = _estimate_cost(model_id, in_tok, out_tok)
+        node_cost = _estimate_cost(resolved_model, in_tok, out_tok)
         node_usage = {"input_tokens": in_tok, "output_tokens": out_tok, "cost_usd": round(node_cost, 6)}
 
-        # Accumulate run-level usage
         prev = state.get("usage") or _zero_usage()
         new_usage = {
             "input_tokens": prev["input_tokens"] + in_tok,
@@ -144,10 +216,9 @@ def _make_agent_node(
             "estimated_cost_usd": round(prev["estimated_cost_usd"] + node_cost, 6),
         }
 
-        output = {"text": text}
         await _broadcast(run_id, {
             "event": "node_complete", "node_id": node_id,
-            "output": output, "usage": node_usage, "ts": _now_iso(),
+            "output": {"text": text}, "usage": node_usage, "ts": _now_iso(),
         })
         await _write_log(
             "INFO",
@@ -155,13 +226,56 @@ def _make_agent_node(
             workflow_id,
             agent_id_str,
         )
+
+        new_messages = list(history) + [text]
         loop_count = state.get("loop_count", 0) + 1
-        # After MAX_LOOPS passes set condition_result=True so the condition exits the loop
-        condition_result = True if loop_count >= MAX_LOOPS else state.get("condition_result", False)
-        return {**state, "messages": new_messages, "current_output": text,
-                "loop_count": loop_count, "condition_result": condition_result, "usage": new_usage}
+        condition_result = True if loop_count >= max_loops else state.get("condition_result", False)
+        return {
+            **state,
+            "messages": new_messages,
+            "current_output": text,
+            "loop_count": loop_count,
+            "condition_result": condition_result,
+            "usage": new_usage,
+        }
 
     return agent_node
+
+
+_TOOL_NODE_SKIP_KEYS = {"id", "type", "tool_name", "label", "x", "y"}
+
+
+def _make_tool_node(
+    node_id: str,
+    tool_name: str,
+    run_id: str,
+    workflow_id: str | None = None,
+    node_params: dict | None = None,
+):
+    async def tool_node(state: dict) -> dict:
+        await _broadcast(run_id, {"event": "node_enter", "node_id": node_id, "ts": _now_iso()})
+        await _write_log("INFO", f"Tool '{tool_name}' started", workflow_id)
+
+        from app.tools import PIPELINE_TOOLS
+        tool_fn = PIPELINE_TOOLS.get(tool_name)
+        if not tool_fn:
+            raise ValueError(f"Unknown pipeline tool: '{tool_name}'")
+
+        # Node-level params (e.g. slack_channel) are injected into state
+        # but do not override values already set by upstream nodes
+        merged = {**(node_params or {}), **state}
+        new_state = await tool_fn(merged)
+
+        await _broadcast(run_id, {
+            "event": "node_complete",
+            "node_id": node_id,
+            "output": {"tool": tool_name},
+            "ts": _now_iso(),
+        })
+        await _write_log("INFO", f"Tool '{tool_name}' completed", workflow_id)
+        return new_state
+
+    return tool_node
 
 
 def _make_condition_node(node_id: str, run_id: str):
@@ -201,6 +315,7 @@ class WorkflowRunner:
         """
         nodes = graph_definition.get("nodes", [])
         edges = graph_definition.get("edges", [])
+        max_loops = int(graph_definition.get("max_loops", MAX_LOOPS))
 
         # Build id -> node lookup
         node_map = {n["id"]: n for n in nodes}
@@ -228,28 +343,36 @@ class WorkflowRunner:
                 graph.add_node(nid, _make_start_node(run_id))
             elif ntype == "end":
                 graph.add_node(nid, _make_end_node(run_id))
+            elif ntype == "tool":
+                tool_name = node.get("tool_name", "")
+                node_params = {k: v for k, v in node.items() if k not in _TOOL_NODE_SKIP_KEYS}
+                graph.add_node(nid, _make_tool_node(nid, tool_name, run_id, workflow_id, node_params))
             elif ntype == "agent":
                 agent_id = node.get("agent_id")
                 agent_obj = agents_map.get(str(agent_id)) if agent_id else None
-                system_prompt = ""
-                model_id = "claude-haiku-4-5-20251001"
+                # Node-level system_prompt overrides the agent's stored prompt
+                system_prompt = node.get("system_prompt") or ""
+                model_id = node.get("model") or "claude-haiku-4-5-20251001"
                 if agent_obj:
-                    system_prompt = (
-                        agent_obj.system_prompt
-                        if hasattr(agent_obj, "system_prompt")
-                        else agent_obj.get("system_prompt", "")
-                    ) or ""
+                    if not system_prompt:
+                        system_prompt = (
+                            agent_obj.system_prompt
+                            if hasattr(agent_obj, "system_prompt")
+                            else agent_obj.get("system_prompt", "")
+                        ) or ""
                     agent_model = (
                         agent_obj.model
                         if hasattr(agent_obj, "model")
                         else agent_obj.get("model", "")
                     ) or ""
-                    if agent_model:
+                    if agent_model and not node.get("model"):
                         model_id = agent_model
                 graph.add_node(nid, _make_agent_node(
                     nid, system_prompt, model_id, run_id,
                     workflow_id=workflow_id,
                     agent_id_str=str(agent_id) if agent_id else None,
+                    agent_obj=agent_obj,
+                    max_loops=max_loops,
                 ))
             elif ntype == "condition":
                 graph.add_node(nid, _make_condition_node(nid, run_id))
@@ -325,6 +448,7 @@ async def run_workflow(
         )
         await _write_log("INFO", f"Workflow run {run_id} started", workflow_id)
 
+        max_loops = int(graph_definition.get("max_loops", MAX_LOOPS))
         compiled = WorkflowRunner.compile(graph_definition, agents_map, run_id, workflow_id)
         app_graph = compiled.compile()
 
@@ -339,7 +463,7 @@ async def run_workflow(
 
         final_state = await app_graph.ainvoke(
             initial_state,
-            config={"recursion_limit": MAX_LOOPS * 10 + 20},
+            config={"recursion_limit": max_loops * 10 + 20},
         )
         final_usage = final_state.get("usage") or _zero_usage()
         output = {

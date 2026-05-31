@@ -69,10 +69,34 @@ async def _get_slack_agent() -> Agent | None:
 
 
 # ---------------------------------------------------------------------------
-# LLM call
+# Workflow lookup — find a message-triggered workflow for a given agent
 # ---------------------------------------------------------------------------
 
-async def _run_agent(agent: Agent | None, user_text: str) -> str:
+async def _find_message_workflow(agent: Agent):
+    """Return the first message-triggered Workflow whose graph contains this agent's id."""
+    from app.models.workflow import Workflow
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        workflows = (
+            await db.execute(
+                select(Workflow).where(Workflow.trigger_type == "message")
+            )
+        ).scalars().all()
+
+    agent_id_str = str(agent.id)
+    for wf in workflows:
+        for node in wf.graph_definition.get("nodes", []):
+            if node.get("type") == "agent" and str(node.get("agent_id", "")) == agent_id_str:
+                return wf
+    return None
+
+
+# ---------------------------------------------------------------------------
+# LLM call (fallback — no workflow configured)
+# ---------------------------------------------------------------------------
+
+async def _run_agent_direct(agent: Agent | None, user_text: str) -> str:
     model_id = (agent.model if agent else None) or "claude-haiku-4-5-20251001"
     system_prompt = (agent.system_prompt if agent else None) or "You are a helpful assistant."
 
@@ -86,6 +110,52 @@ async def _run_agent(agent: Agent | None, user_text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Workflow execution via message trigger
+# ---------------------------------------------------------------------------
+
+async def _run_via_workflow(workflow, agent: Agent, user_text: str) -> str:
+    """Execute a message-triggered workflow and return the final text output."""
+    import uuid as _uuid
+    from app.database import AsyncSessionLocal
+    from app.models.workflow_run import WorkflowRun
+    from app.workflow_runner import run_workflow
+
+    run_id = str(_uuid.uuid4())
+    workflow_id = str(workflow.id)
+    agents_map = {str(agent.id): agent}
+
+    async with AsyncSessionLocal() as db:
+        run = WorkflowRun(
+            id=_uuid.UUID(run_id),
+            workflow_id=workflow.id,
+            status="pending",
+        )
+        db.add(run)
+        await db.commit()
+
+        await run_workflow(
+            run_id=run_id,
+            workflow_id=workflow_id,
+            graph_definition=workflow.graph_definition,
+            agents_map=agents_map,
+            input_data={"input": user_text},
+            db=db,
+        )
+
+        # Re-fetch final state
+        from sqlalchemy import select
+        run_obj = (
+            await db.execute(select(WorkflowRun).where(WorkflowRun.id == _uuid.UUID(run_id)))
+        ).scalar_one_or_none()
+
+        if run_obj and run_obj.output:
+            msgs = run_obj.output.get("messages", [])
+            if msgs:
+                return str(msgs[-1])
+        return "Workflow completed."
+
+
+# ---------------------------------------------------------------------------
 # Event handler
 # ---------------------------------------------------------------------------
 
@@ -95,7 +165,6 @@ async def _handle_event(client: SocketModeClient, req: SocketModeRequest) -> Non
 
     payload = req.payload
     event = payload.get("event", {})
-    event_type = event.get("type", "")
 
     # Ignore bot's own messages
     if event.get("bot_id") or event.get("subtype") == "bot_message":
@@ -114,7 +183,6 @@ async def _handle_event(client: SocketModeClient, req: SocketModeRequest) -> Non
     if not user_text:
         return
 
-    # Use channel as session_id for grouping conversation history
     session_id = uuid.uuid5(uuid.NAMESPACE_DNS, f"slack:{channel}")
 
     agent = await _get_slack_agent()
@@ -123,9 +191,14 @@ async def _handle_event(client: SocketModeClient, req: SocketModeRequest) -> Non
     # Persist user message
     await _save_message("user", user_text, agent_id, session_id)
 
-    # Run agent
+    # Route: use a message-triggered workflow if one exists for this agent
     try:
-        reply = await _run_agent(agent, user_text)
+        workflow = await _find_message_workflow(agent) if agent else None
+        if workflow:
+            logger.info("Routing Slack message to workflow '%s'", workflow.name)
+            reply = await _run_via_workflow(workflow, agent, user_text)
+        else:
+            reply = await _run_agent_direct(agent, user_text)
     except Exception as exc:
         logger.error("Agent error: %s", exc)
         reply = "Sorry, I encountered an error processing your message."

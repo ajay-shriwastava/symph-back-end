@@ -1,22 +1,32 @@
+import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s  %(name)s — %(message)s",
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import agents, logs, messages, workflows
 from app.routers.agent_config import router as agent_config_router
+from app.routers.templates import router as templates_router
 from app.routers.workflow_runs import router as workflow_runs_router
 from app.routers.workflow_runs import ws_router as workflow_runs_ws_router
+from app.scheduler import start_scheduler, stop_scheduler
 from app.slack_bot import start_slack_bot, stop_slack_bot
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await start_slack_bot()
+    await start_scheduler()
     yield
+    await stop_scheduler()
     await stop_slack_bot()
 
 
@@ -32,6 +42,7 @@ app.add_middleware(
 
 app.include_router(agents.router)
 app.include_router(agent_config_router)
+app.include_router(templates_router)
 app.include_router(workflows.router)
 app.include_router(messages.router)
 app.include_router(logs.router)

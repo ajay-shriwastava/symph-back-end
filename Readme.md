@@ -112,8 +112,64 @@ Auth is currently a stub — any non-empty token is accepted.
 | `LANGCHAIN_API_KEY` | — | LangSmith API key (get at smith.langchain.com) |
 | `LANGCHAIN_PROJECT` | — | LangSmith project name (e.g. `symphony`) |
 
-## Observability
+## Slack Integration
 
-Symphony uses [LangSmith](https://smith.langchain.com) for deep LLM tracing. When `LANGCHAIN_TRACING_V2=true` is set, every workflow run and Slack message is automatically traced — including full prompt/response, token counts, cost, and per-node latency.
+Symphony includes a Socket Mode Slack bot (`app/slack_bot.py`) that starts automatically with the FastAPI server.
+
+### How it works
+
+- Listens for **direct messages** (`message.im`) and **@mentions** (`app_mention`)
+- Routes each message to the first agent whose `channels` JSONB list contains `"slack"`
+- Falls back to `claude-haiku-4-5-20251001` with a default system prompt if no agent is configured
+- Persists every user message and assistant reply to the `messages` table; the Slack channel ID is used as the `session_id`
+- Gracefully disables itself if `SLACK_BOT_TOKEN` or `SLACK_APP_TOKEN` are not set
+
+### Setup
+
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with **Socket Mode** enabled
+2. Add bot scopes: `chat:write`, `im:history`, `app_mentions:read`
+3. Subscribe to events: `message.im`, `app_mention`
+4. Set the tokens:
+   ```bash
+   export SLACK_BOT_TOKEN="xoxb-..."
+   export SLACK_APP_TOKEN="xapp-..."
+   ```
+5. In the Symphony UI (Agent Configuration → Channels), add `slack` to the channels list for the agent that should handle Slack messages
+
+---
+
+## Observability — LangSmith Tracing
+
+Symphony integrates with [LangSmith](https://smith.langchain.com) for deep LLM tracing. When enabled, every workflow run and Slack bot message is automatically traced — including full prompt/response content, token counts, cost, and per-node latency. No code changes are needed; tracing is entirely controlled by environment variables.
+
+### Setup
+
+1. Sign up at [smith.langchain.com](https://smith.langchain.com) and create a project named `symphony`
+2. Go to **Settings → API Keys** and generate a new key
+3. Add to your `.env` file:
+   ```
+   LANGCHAIN_TRACING_V2=true
+   LANGCHAIN_API_KEY=lsv2_pt_...
+   LANGCHAIN_PROJECT=symphony
+   ```
+4. Restart the backend — tracing starts immediately on the next workflow run or Slack message
+
+To disable tracing, set `LANGCHAIN_TRACING_V2=false` or remove the variable.
+
+### What gets traced
+
+| Trigger | What you see in LangSmith |
+|---|---|
+| Workflow run (any node with an Agent) | Full LangGraph run tree, per-node latency, Claude prompt + response |
+| Slack message | Single LLM call with system prompt, user message, and reply |
+
+### Viewing traces
+
+1. Open [smith.langchain.com](https://smith.langchain.com) and select the **symphony** project
+2. The **Traces** tab lists every run in reverse-chronological order
+3. Click a trace to expand the full call tree — each node shows input, output, token usage, latency, and cost
+4. Use the **Filter** bar to search by status, model, latency, or date range
+
+### Local logs
 
 All run events are also persisted to the local `logs` table and visible in the Symphony UI under **Logs**.
