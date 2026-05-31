@@ -95,7 +95,7 @@ async def list_memory(
     db: AsyncSession = Depends(get_db),
     _: dict = Depends(get_current_user),
 ):
-    _assert_agent_exists(agent_id, db)
+    await _assert_agent_exists(agent_id, db)
     total = (
         await db.execute(
             select(func.count()).select_from(AgentMemory).where(AgentMemory.agent_id == agent_id)
