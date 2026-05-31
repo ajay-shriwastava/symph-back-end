@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class MessageCreate(BaseModel):
     agent_id: UUID
     session_id: UUID
-    role: Literal["user", "assistant", "system", "tool"]
+    role: Literal["user", "assistant", "system", "tool", "agent"]
     content: str
 
 

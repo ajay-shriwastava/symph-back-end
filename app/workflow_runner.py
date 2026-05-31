@@ -227,6 +227,22 @@ def _make_agent_node(
             agent_id_str,
         )
 
+        # Persist agent-to-agent handoff message
+        if agent_id_str:
+            try:
+                from app.database import AsyncSessionLocal
+                from app.models.message import Message as MessageModel
+                async with AsyncSessionLocal() as _db:
+                    _db.add(MessageModel(
+                        agent_id=uuid.UUID(agent_id_str),
+                        session_id=uuid.UUID(run_id),
+                        role="agent",
+                        content=text,
+                    ))
+                    await _db.commit()
+            except Exception as _exc:
+                logger.warning("Could not persist agent handoff message: %s", _exc)
+
         new_messages = list(history) + [text]
         loop_count = state.get("loop_count", 0) + 1
         condition_result = True if loop_count >= max_loops else state.get("condition_result", False)

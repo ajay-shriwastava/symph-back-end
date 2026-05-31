@@ -45,7 +45,26 @@ async def instantiate_template(
     # Deep-copy graph so we can patch agent_id without mutating the template
     graph_def = copy.deepcopy(tmpl["graph_definition"])
 
-    # If the template includes an agent_config, create the agent in the DB
+    # agent_configs (list) — each entry targets a specific node_id
+    for agent_cfg in tmpl.get("agent_configs", []):
+        agent = Agent(
+            id=uuid.uuid4(),
+            name=agent_cfg["name"],
+            description=agent_cfg.get("description"),
+            model=agent_cfg.get("model", "claude-haiku-4-5-20251001"),
+            system_prompt=agent_cfg.get("system_prompt"),
+            tools=agent_cfg.get("tools", []),
+            channels=agent_cfg.get("channels", []),
+            memory_enabled=agent_cfg.get("memory_enabled", False),
+        )
+        db.add(agent)
+        await db.flush()
+        target_node_id = agent_cfg.get("node_id")
+        for node in graph_def.get("nodes", []):
+            if node.get("id") == target_node_id:
+                node["agent_id"] = str(agent.id)
+
+    # agent_config (singular, legacy) — patches all agent nodes with agent_id=None
     agent_cfg = tmpl.get("agent_config")
     if agent_cfg:
         agent = Agent(
@@ -59,9 +78,7 @@ async def instantiate_template(
             memory_enabled=agent_cfg.get("memory_enabled", False),
         )
         db.add(agent)
-        await db.flush()  # get agent.id without committing yet
-
-        # Patch all agent nodes that have agent_id=None with the new agent's id
+        await db.flush()
         for node in graph_def.get("nodes", []):
             if node.get("type") == "agent" and node.get("agent_id") is None:
                 node["agent_id"] = str(agent.id)

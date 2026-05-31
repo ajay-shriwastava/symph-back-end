@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/v1/messages", tags=["messages"])
 async def list_messages(
     session_id: Optional[uuid.UUID] = None,
     agent_id: Optional[uuid.UUID] = None,
+    role: Optional[str] = None,
     skip: int = 0,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -30,6 +31,9 @@ async def list_messages(
     if agent_id:
         q = q.where(Message.agent_id == agent_id)
         count_q = count_q.where(Message.agent_id == agent_id)
+    if role:
+        q = q.where(Message.role == role)
+        count_q = count_q.where(Message.role == role)
     total = (await db.execute(count_q)).scalar_one()
     rows = (
         await db.execute(q.order_by(Message.created_at).offset(skip).limit(limit))
