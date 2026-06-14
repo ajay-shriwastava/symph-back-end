@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: symphony
+    ports:
+      - "5433:5432"   # host 5433 → container 5432 (avoids conflict with local postgres)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres/symphony
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build: .
+    ports:
+      - "8000:8000"   # exposed so /docs is reachable directly during demo
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres/symphony
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_REPORT_CHANNEL: ${SLACK_REPORT_CHANNEL:-data-reports}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-symphony}
+      DATASET_DIR: /data/dataset
+    volumes:
+      - ${DATASET_DIR:-../symph-prgm-mgmt/dataset}:/data/dataset
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build: ../symph-front-end
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
