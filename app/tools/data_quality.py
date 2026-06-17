@@ -16,7 +16,7 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
-DATASET_DIR   = os.environ.get("DATASET_DIR", "/Users/ajay/tech/yuno/symph-prgm-mgmt/dataset")
+DATASET_DIR   = os.environ.get("DATASET_DIR", "/Users/ajay/tech/symphony/symph-prgm-mgmt/dataset")
 OUTPUT_DIR    = os.path.join(DATASET_DIR, "output")
 ERROR_DIR     = os.path.join(DATASET_DIR, "error")
 

@@ -1,6 +1,6 @@
 # symph-back-end
 
-FastAPI backend for Symphony — Yuno's Agentic AI Orchestration Platform.
+FastAPI backend for Symphony — an Agentic AI Orchestration Platform.
 
 FastAPI + LangGraph + PostgreSQL, running in a Python virtualenv named `symphony`.
 

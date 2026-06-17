@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 DATASET_DIR = os.environ.get(
     "DATASET_DIR",
-    "/Users/ajay/tech/yuno/symph-prgm-mgmt/dataset",
+    "/Users/ajay/tech/symphony/symph-prgm-mgmt/dataset",
 )
 INPUT_DIR     = os.path.join(DATASET_DIR, "input")
 OUTPUT_DIR    = os.path.join(DATASET_DIR, "output")
