@@ -4,11 +4,11 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: symphony
+      POSTGRES_DB: ${DB_NAME:-symphony}
     ports:
       - "5433:5432"   # host 5433 → container 5432 (avoids conflict with local postgres)
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./pgdata/${DB_NAME:-symphony}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -19,7 +19,7 @@ services:
     build: .
     command: alembic upgrade head
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres/symphony
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres/${DB_NAME:-symphony}
     depends_on:
       postgres:
         condition: service_healthy
@@ -29,7 +29,7 @@ services:
     ports:
       - "8000:8000"   # exposed so /docs is reachable directly during demo
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres/symphony
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres/${DB_NAME:-symphony}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
@@ -51,5 +51,4 @@ services:
     depends_on:
       - backend
 
-volumes:
-  pgdata:
+# pgdata is now a per-branch bind mount at ./pgdata/<DB_NAME>/
