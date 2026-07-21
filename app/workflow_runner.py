@@ -11,6 +11,7 @@ State keys:
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -477,9 +478,17 @@ async def run_workflow(
             "usage": _zero_usage(),
         }
 
+        langsmith_cfg: dict = {}
+        if os.environ.get("LANGCHAIN_TRACING_V2") == "true":
+            langsmith_cfg = {
+                "run_name": f"wf-{(workflow_id or '')[:8]}-run-{run_id[:8]}",
+                "tags":     ["symphony", "workflow-run"],
+                "metadata": {"workflow_id": workflow_id or "", "run_id": run_id},
+            }
+
         final_state = await app_graph.ainvoke(
             initial_state,
-            config={"recursion_limit": max_loops * 10 + 20},
+            config={"recursion_limit": max_loops * 10 + 20, **langsmith_cfg},
         )
         final_usage = final_state.get("usage") or _zero_usage()
         output = {

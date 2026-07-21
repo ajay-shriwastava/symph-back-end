@@ -4,27 +4,35 @@ from app.tools.db_ingestor import run as db_ingestor_run, ingest_to_db
 from app.tools.data_profiler import run as data_profiler_run, profile_data
 from app.tools.job_stats_collector import run as job_stats_collector_run, collect_job_stats
 from app.tools.report_publisher import run as report_publisher_run, publish_report
+from app.tools.market_signal_fetcher import run as market_signal_fetcher_run, fetch_rss_signal
+from app.tools.portfolio_impact_analyzer import run as portfolio_impact_analyzer_run
+from app.tools.product_universe_filter import run as product_universe_filter_run
+from app.tools.rm_alert_publisher import run as rm_alert_publisher_run, publish_rm_alert
 
-# Legacy pipeline-node tools (state dict → state dict).
+# Pipeline-node tools (state dict → state dict).
 # Used by type="tool" nodes in graph_definition.
 PIPELINE_TOOLS: dict = {
-    "csv_scanner":       csv_scanner_run,
-    "data_quality":      data_quality_run,
-    "db_ingestor":       db_ingestor_run,
-    "data_profiler":     data_profiler_run,
-    "job_stats_collector": job_stats_collector_run,
-    "report_publisher":  report_publisher_run,
+    "csv_scanner":               csv_scanner_run,
+    "data_quality":              data_quality_run,
+    "db_ingestor":               db_ingestor_run,
+    "data_profiler":             data_profiler_run,
+    "job_stats_collector":       job_stats_collector_run,
+    "report_publisher":          report_publisher_run,
+    "portfolio_impact_analyzer": portfolio_impact_analyzer_run,
+    "product_universe_filter":   product_universe_filter_run,
 }
 
 # LangChain @tool objects keyed by tool name.
 # Used by real agent nodes (create_react_agent).
 TOOL_REGISTRY: dict = {
-    "scan_csv":            scan_csv,
-    "check_data_quality":  check_data_quality,
-    "ingest_to_db":        ingest_to_db,
-    "profile_data":        profile_data,
-    "collect_job_stats":   collect_job_stats,
-    "publish_report":      publish_report,
+    "scan_csv":           scan_csv,
+    "check_data_quality": check_data_quality,
+    "ingest_to_db":       ingest_to_db,
+    "profile_data":       profile_data,
+    "collect_job_stats":  collect_job_stats,
+    "publish_report":     publish_report,
+    "fetch_rss_signal":   fetch_rss_signal,
+    "publish_rm_alert":   publish_rm_alert,
 }
 
 # All @tool objects as a list (for convenience)
