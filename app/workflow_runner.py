@@ -12,6 +12,7 @@ State keys:
 import asyncio
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -83,6 +84,23 @@ async def _write_log(
 
 
 # ---------------------------------------------------------------------------
+# System prompt template resolver
+# ---------------------------------------------------------------------------
+
+def _resolve_system_prompt(template: str, **variables: str) -> str:
+    """Replace {variable} placeholders in a system prompt with resolved values.
+
+    Only known variables are substituted — unknown placeholders (e.g. JSON
+    examples like {field: value}) are left unchanged so they don't cause errors.
+    """
+    def _replacer(match: re.Match) -> str:
+        key = match.group(1)
+        return variables.get(key, match.group(0))
+
+    return re.sub(r"\{(\w+)\}", _replacer, template)
+
+
+# ---------------------------------------------------------------------------
 # Node factories
 # ---------------------------------------------------------------------------
 
@@ -137,12 +155,13 @@ def _make_agent_node(
 
             agent_id = getattr(agent_obj, "id", None)
 
-            # Load memory if enabled
+            # 1. Load memory entries
             memory_enabled = (
                 agent_obj.memory_enabled
                 if hasattr(agent_obj, "memory_enabled")
                 else agent_obj.get("memory_enabled", False)
             )
+            mem_text = ""
             if memory_enabled and agent_id:
                 try:
                     async with AsyncSessionLocal() as db:
@@ -151,11 +170,34 @@ def _make_agent_node(
                         )).scalars().all()
                         if rows:
                             mem_text = "\n".join(f"{r.key}: {r.value}" for r in rows)
-                            resolved_system += f"\n\nYour current memory:\n{mem_text}"
                 except Exception as exc:
                     logger.warning("Could not load agent memory: %s", exc)
 
-            # Apply guardrails
+            # 2. Resolve template variables in system prompt
+            agent_name = (
+                agent_obj.name if hasattr(agent_obj, "name") else agent_obj.get("name", "")
+            ) or ""
+            resolved_system = _resolve_system_prompt(
+                resolved_system,
+                agent_name=agent_name,
+                current_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                memory=mem_text,
+            )
+
+            # 3. Backward compat: append memory if {memory} not used in template
+            if memory_enabled and mem_text and "{memory}" not in (system_prompt or ""):
+                resolved_system += f"\n\nYour current memory:\n{mem_text}"
+
+            # 3b. Instruct the agent to use memory tools when memory is enabled
+            if memory_enabled and agent_id:
+                resolved_system += (
+                    "\n\nYou have persistent memory across runs. "
+                    "Use the remember(key, value) tool to store any fact worth retaining for future runs — "
+                    "such as user preferences, decisions made, or important context. "
+                    "Use forget(key) to remove a fact that is no longer accurate."
+                )
+
+            # 4. Guardrails — appended after template resolution (safety boundary)
             guardrails = (
                 agent_obj.guardrails
                 if hasattr(agent_obj, "guardrails")
@@ -165,13 +207,16 @@ def _make_agent_node(
             if restricted:
                 resolved_system += f"\n\nDo NOT discuss: {', '.join(restricted)}."
 
-            # Bind tools listed in agent.tools
+            # 5. Bind tools + auto-add remember/forget when memory is enabled
             tool_names: list = (
                 agent_obj.tools
                 if hasattr(agent_obj, "tools")
                 else agent_obj.get("tools", [])
             ) or []
             bound_tools = [TOOL_REGISTRY[t] for t in tool_names if t in TOOL_REGISTRY]
+            if memory_enabled and agent_id:
+                from app.tools.memory_tools import make_memory_tools
+                bound_tools = bound_tools + make_memory_tools(str(agent_id))
 
             log_msg = f"Node '{node_id}' started (model: {resolved_model}"
             log_msg += f", tools: {tool_names})" if tool_names else ")"

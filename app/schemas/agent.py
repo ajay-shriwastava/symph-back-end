@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 class AgentCreate(BaseModel):
     name: str = Field(..., max_length=255)
     description: Optional[str] = None
-    role_persona: Optional[str] = None
     model: str = Field(default="claude-sonnet-4-6", max_length=100)
     system_prompt: Optional[str] = None
     tools: List[str] = Field(default_factory=list)
@@ -19,7 +18,6 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
-    role_persona: Optional[str] = None
     model: Optional[str] = Field(default=None, max_length=100)
     system_prompt: Optional[str] = None
     tools: Optional[List[str]] = None
@@ -31,7 +29,6 @@ class AgentOut(BaseModel):
     id: UUID
     name: str
     description: Optional[str]
-    role_persona: Optional[str]
     model: str
     system_prompt: Optional[str]
     tools: List[str]
