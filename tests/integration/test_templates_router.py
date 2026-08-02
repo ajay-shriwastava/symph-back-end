@@ -41,7 +41,11 @@ class TestInstantiateTemplate:
             )
         assert res.status_code == 201
         data = res.json()
-        assert data["name"] == "Data Ingestion Pipeline"
+        assert data["name"].startswith("Data Ingestion Pipeline (")
+        assert data["name"].endswith(")")
+        # suffix must match the first 8 hex chars of the workflow id
+        suffix = data["name"].removeprefix("Data Ingestion Pipeline (").removesuffix(")")
+        assert data["id"].startswith(suffix)
         assert data["status"] == "draft"
         assert data["graph_definition"] is not None
 
@@ -93,6 +97,7 @@ class TestInstantiateTemplate:
         assert r1.status_code == 201
         assert r2.status_code == 201
         assert r1.json()["id"] != r2.json()["id"]
+        assert r1.json()["name"] != r2.json()["name"]
 
     async def test_instantiated_workflow_visible_in_list(self, client):
         with patch("app.scheduler.register_workflow", AsyncMock()):

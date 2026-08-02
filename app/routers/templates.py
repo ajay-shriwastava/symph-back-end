@@ -42,6 +42,11 @@ async def instantiate_template(
     if not tmpl:
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
 
+    # Pre-generate the workflow UUID so agents and workflow share the same suffix,
+    # making the suffix directly traceable to the workflow's real DB id.
+    wf_id = uuid.uuid4()
+    suffix = f"({wf_id.hex[:8]})"
+
     # Deep-copy graph so we can patch agent_id without mutating the template
     graph_def = copy.deepcopy(tmpl["graph_definition"])
 
@@ -49,7 +54,7 @@ async def instantiate_template(
     for agent_cfg in tmpl.get("agent_configs", []):
         agent = Agent(
             id=uuid.uuid4(),
-            name=agent_cfg["name"],
+            name=f"{agent_cfg['name']} {suffix}",
             description=agent_cfg.get("description"),
             model=agent_cfg.get("model", "claude-haiku-4-5-20251001"),
             system_prompt=agent_cfg.get("system_prompt"),
@@ -69,7 +74,7 @@ async def instantiate_template(
     if agent_cfg:
         agent = Agent(
             id=uuid.uuid4(),
-            name=agent_cfg["name"],
+            name=f"{agent_cfg['name']} {suffix}",
             description=agent_cfg.get("description"),
             model=agent_cfg.get("model", "claude-haiku-4-5-20251001"),
             system_prompt=agent_cfg.get("system_prompt"),
@@ -84,7 +89,8 @@ async def instantiate_template(
                 node["agent_id"] = str(agent.id)
 
     workflow = Workflow(
-        name=tmpl["name"],
+        id=wf_id,
+        name=f"{tmpl['name']} {suffix}",
         description=tmpl["description"],
         status="draft",
         graph_definition=graph_def,

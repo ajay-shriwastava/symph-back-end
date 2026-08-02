@@ -13,7 +13,9 @@ import asyncio
 import logging
 import os
 import re
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -46,6 +48,25 @@ def _estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> floa
 
 def _zero_usage() -> dict:
     return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — per-agent sliding window (in-memory, single-server)
+# ---------------------------------------------------------------------------
+
+_rate_limit_windows: dict[str, deque] = {}
+
+
+def _check_rate_limit(agent_id: str, limit: int) -> bool:
+    """Return True if the call is within the rate limit, False if exceeded."""
+    now = time.monotonic()
+    window = _rate_limit_windows.setdefault(agent_id, deque())
+    while window and now - window[0] > 60.0:
+        window.popleft()
+    if len(window) >= limit:
+        return False
+    window.append(now)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +167,12 @@ def _make_agent_node(
         resolved_system = system_prompt or ""
         resolved_model = model_id or "claude-haiku-4-5-20251001"
         bound_tools: list = []
+        max_tokens_param: int | None = None
+
+        # Compute user_input early so the input guard can inspect it
+        history = state.get("messages", [])
+        user_input = history[-1] if history else state.get("input", "Begin.")
+        _input_rejected: str | None = None
 
         if agent_obj is not None:
             from app.tools import TOOL_REGISTRY
@@ -203,9 +230,50 @@ def _make_agent_node(
                 if hasattr(agent_obj, "guardrails")
                 else agent_obj.get("guardrails", {})
             ) or {}
+
+            # 4a. restricted_topics → soft system-prompt guard
             restricted = guardrails.get("restricted_topics", [])
             if restricted:
                 resolved_system += f"\n\nDo NOT discuss: {', '.join(restricted)}."
+
+            # 4b. content_filter_level → system-prompt hardening
+            filter_level = guardrails.get("content_filter_level", "off")
+            if filter_level == "low":
+                resolved_system += "\n\nAvoid generating harmful, explicit, or offensive content."
+            elif filter_level == "medium":
+                resolved_system += (
+                    "\n\nDo not generate harmful, explicit, offensive, or inappropriate content. "
+                    "If asked to do so, politely decline."
+                )
+            elif filter_level == "high":
+                resolved_system += (
+                    "\n\nStrict content policy: Refuse any request that could be harmful, "
+                    "explicit, offensive, illegal, or inappropriate. Err on the side of caution."
+                )
+
+            # 4c. max_tokens_per_response → passed to the LLM constructor
+            max_tokens_val = guardrails.get("max_tokens_per_response")
+            if max_tokens_val and isinstance(max_tokens_val, int) and max_tokens_val > 0:
+                max_tokens_param = max_tokens_val
+
+            # 4d. rate_limit_per_minute → sliding-window check before LLM call
+            rate_limit = guardrails.get("rate_limit_per_minute", 0)
+            if rate_limit and agent_id_str:
+                if not _check_rate_limit(agent_id_str, rate_limit):
+                    raise RuntimeError(
+                        f"Rate limit exceeded: agent is allowed {rate_limit} calls/min."
+                    )
+
+            # 4e. restricted_topics input guard — hard block before LLM call
+            if restricted:
+                user_input_lower = str(user_input).lower()
+                for topic in restricted:
+                    if topic.lower() in user_input_lower:
+                        _input_rejected = "I'm sorry, I'm not able to discuss that topic."
+                        logger.info(
+                            "Node '%s' input rejected — restricted topic detected.", node_id
+                        )
+                        break
 
             # 5. Bind tools + auto-add remember/forget when memory is enabled
             tool_names: list = (
@@ -224,15 +292,20 @@ def _make_agent_node(
         else:
             await _write_log("INFO", f"Node '{node_id}' started (model: {resolved_model})", workflow_id, agent_id_str)
 
-        llm = ChatAnthropic(model=resolved_model)
-        history = state.get("messages", [])
-        user_input = history[-1] if history else state.get("input", "Begin.")
+        llm_kwargs: dict = {"model": resolved_model}
+        if max_tokens_param:
+            llm_kwargs["max_tokens"] = max_tokens_param
+        llm = ChatAnthropic(**llm_kwargs)
 
         messages_in = [SystemMessage(content=resolved_system or "You are a helpful assistant.")]
         messages_in.append(HumanMessage(content=str(user_input)))
 
+        # Guardrail: input rejected — return canned response, skip LLM call
+        if _input_rejected is not None:
+            text = _input_rejected
+            usage_meta: dict = {}
         # ReAct loop when tools are bound; otherwise single-turn
-        if bound_tools:
+        elif bound_tools:
             from langgraph.prebuilt import create_react_agent
             from langchain_core.messages import AIMessage
             react_agent = create_react_agent(llm, bound_tools)

@@ -1,6 +1,7 @@
 """
 Top-level shared fixtures for all Symphony tests.
 """
+import gc
 import os
 from unittest.mock import AsyncMock, patch
 import pytest
@@ -26,6 +27,7 @@ _TestSessionLocal = async_sessionmaker(_test_engine, class_=AsyncSession, expire
 # Session-scoped: import all models then create tables once, drop after session
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def create_tables():
     # Importing app.main ensures every model is registered with Base.metadata
@@ -39,6 +41,9 @@ async def create_tables():
 
     async with _test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+    await _test_engine.dispose()
+    gc.collect()
 
 
 # ---------------------------------------------------------------------------
