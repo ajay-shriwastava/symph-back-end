@@ -34,7 +34,6 @@ class AgentOut(BaseModel):
     tools: List[str]
     channels: List[str]
     memory_enabled: bool
-    skills: List[Any] = Field(default_factory=list)
     interaction_rules: Dict[str, Any] = Field(default_factory=dict)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
@@ -79,18 +78,6 @@ class ScheduleOut(BaseModel):
 class ScheduleListOut(BaseModel):
     items: List[ScheduleOut]
     total: int
-
-
-# ── Skills schemas ────────────────────────────────────────────────────────────
-
-class SkillItem(BaseModel):
-    name: str = Field(..., max_length=255)
-    description: Optional[str] = None
-    enabled: bool = True
-
-
-class AgentSkillsUpdate(BaseModel):
-    skills: List[SkillItem] = Field(default_factory=list)
 
 
 # ── Interaction rules schemas ─────────────────────────────────────────────────

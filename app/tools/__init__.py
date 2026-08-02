@@ -8,6 +8,9 @@ from app.tools.market_signal_fetcher import run as market_signal_fetcher_run, fe
 from app.tools.portfolio_impact_analyzer import run as portfolio_impact_analyzer_run
 from app.tools.product_universe_filter import run as product_universe_filter_run
 from app.tools.rm_alert_publisher import run as rm_alert_publisher_run, publish_rm_alert
+from app.tools.email_sender import send_email
+from app.tools.whatsapp_sender import send_whatsapp
+from app.tools.telegram_sender import send_telegram
 
 # Pipeline-node tools (state dict → state dict).
 # Used by type="tool" nodes in graph_definition.
@@ -33,6 +36,18 @@ TOOL_REGISTRY: dict = {
     "publish_report":     publish_report,
     "fetch_rss_signal":   fetch_rss_signal,
     "publish_rm_alert":   publish_rm_alert,
+    "send_email":         send_email,
+    "send_whatsapp":      send_whatsapp,
+    "send_telegram":      send_telegram,
+}
+
+# Channel name → list of tool names auto-injected when that channel is active.
+# Tools must exist in TOOL_REGISTRY.
+CHANNEL_TOOLS: dict[str, list[str]] = {
+    "slack":     ["publish_report"],
+    "email":     ["send_email"],
+    "whatsapp":  ["send_whatsapp"],
+    "telegram":  ["send_telegram"],
 }
 
 # All @tool objects as a list (for convenience)

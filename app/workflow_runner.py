@@ -168,6 +168,8 @@ def _make_agent_node(
         resolved_model = model_id or "claude-haiku-4-5-20251001"
         bound_tools: list = []
         max_tokens_param: int | None = None
+        temperature_param: float | None = None
+        max_turns_param: int = 10
 
         # Compute user_input early so the input guard can inspect it
         history = state.get("messages", [])
@@ -286,6 +288,39 @@ def _make_agent_node(
                 from app.tools.memory_tools import make_memory_tools
                 bound_tools = bound_tools + make_memory_tools(str(agent_id))
 
+            # 6. Auto-inject channel tools for each active channel
+            from app.tools import CHANNEL_TOOLS
+            active_channels: list = (
+                agent_obj.channels
+                if hasattr(agent_obj, "channels")
+                else agent_obj.get("channels", [])
+            ) or []
+            already_bound = {t.name for t in bound_tools}
+            for channel in active_channels:
+                for tool_name in CHANNEL_TOOLS.get(channel, []):
+                    if tool_name in TOOL_REGISTRY and tool_name not in already_bound:
+                        bound_tools.append(TOOL_REGISTRY[tool_name])
+                        already_bound.add(tool_name)
+
+            # 7. Interaction rules — temperature, max_turns, response_style, language
+            interaction_rules = (
+                agent_obj.interaction_rules
+                if hasattr(agent_obj, "interaction_rules")
+                else agent_obj.get("interaction_rules", {})
+            ) or {}
+            temperature_val = interaction_rules.get("temperature")
+            if temperature_val is not None:
+                temperature_param = float(temperature_val)
+            max_turns_param = int(interaction_rules.get("max_turns", 10))
+            response_style = interaction_rules.get("response_style", "balanced")
+            language = interaction_rules.get("language", "en")
+            if response_style == "concise":
+                resolved_system += "\n\nBe concise. Keep responses brief and to the point."
+            elif response_style == "verbose":
+                resolved_system += "\n\nBe thorough and detailed in your responses."
+            if language and language.lower() not in ("en", "english"):
+                resolved_system += f"\n\nAlways respond in the following language: {language}."
+
             log_msg = f"Node '{node_id}' started (model: {resolved_model}"
             log_msg += f", tools: {tool_names})" if tool_names else ")"
             await _write_log("INFO", log_msg, workflow_id, agent_id_str)
@@ -295,6 +330,8 @@ def _make_agent_node(
         llm_kwargs: dict = {"model": resolved_model}
         if max_tokens_param:
             llm_kwargs["max_tokens"] = max_tokens_param
+        if temperature_param is not None:
+            llm_kwargs["temperature"] = temperature_param
         llm = ChatAnthropic(**llm_kwargs)
 
         messages_in = [SystemMessage(content=resolved_system or "You are a helpful assistant.")]
@@ -309,7 +346,10 @@ def _make_agent_node(
             from langgraph.prebuilt import create_react_agent
             from langchain_core.messages import AIMessage
             react_agent = create_react_agent(llm, bound_tools)
-            react_result = await react_agent.ainvoke({"messages": messages_in})
+            react_result = await react_agent.ainvoke(
+                {"messages": messages_in},
+                config={"recursion_limit": max_turns_param * 2},
+            )
             final_msg = next(
                 (m for m in reversed(react_result["messages"])
                  if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)),

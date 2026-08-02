@@ -13,7 +13,6 @@ from app.schemas.agent import (
     AgentGuardrailsUpdate,
     AgentInteractionRulesUpdate,
     AgentOut,
-    AgentSkillsUpdate,
     ScheduleCreate,
     ScheduleListOut,
     ScheduleOut,
@@ -132,22 +131,6 @@ async def delete_schedule(
         raise HTTPException(status_code=404, detail="Schedule not found")
     await db.delete(schedule)
     await db.commit()
-
-
-# ── Skills ────────────────────────────────────────────────────────────────────
-
-@router.put("/agents/{agent_id}/skills", response_model=AgentOut)
-async def update_skills(
-    agent_id: uuid.UUID,
-    body: AgentSkillsUpdate,
-    db: AsyncSession = Depends(get_db),
-    _: dict = Depends(get_current_user),
-):
-    agent = await _get_agent_or_404(agent_id, db)
-    agent.skills = [s.model_dump() for s in body.skills]
-    await db.commit()
-    await db.refresh(agent)
-    return agent
 
 
 # ── Interaction Rules ─────────────────────────────────────────────────────────

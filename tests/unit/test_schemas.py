@@ -13,8 +13,6 @@ from app.schemas.agent import (
     Guardrails,
     InteractionRules,
     ScheduleCreate,
-    SkillItem,
-    AgentSkillsUpdate,
 )
 from app.schemas.message import MessageCreate
 from app.schemas.log import LogCreate
@@ -204,16 +202,3 @@ class TestScheduleCreateSchema:
             ScheduleCreate(label="daily")
 
 
-# ---------------------------------------------------------------------------
-# AgentSkillsUpdate
-# ---------------------------------------------------------------------------
-
-class TestAgentSkillsUpdateSchema:
-    def test_empty_skills(self):
-        s = AgentSkillsUpdate(skills=[])
-        assert s.skills == []
-
-    def test_skill_items(self):
-        s = AgentSkillsUpdate(skills=[SkillItem(name="search", description="web search")])
-        assert s.skills[0].name == "search"
-        assert s.skills[0].enabled is True

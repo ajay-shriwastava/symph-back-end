@@ -1,7 +1,6 @@
 """
 Integration tests for agent config endpoints:
   - /api/v1/agents/{id}/schedules
-  - /api/v1/agents/{id}/skills
   - /api/v1/agents/{id}/interaction-rules
   - /api/v1/agents/{id}/guardrails
 """
@@ -100,43 +99,6 @@ class TestSchedules:
         agent_id = await _make_agent(client)
         res = await client.delete(f"/api/v1/agents/{agent_id}/schedules/{uuid.uuid4()}",
                                   headers={"Authorization": "Bearer test"})
-        assert res.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# Skills
-# ---------------------------------------------------------------------------
-
-class TestSkills:
-    async def test_update_skills(self, client):
-        agent_id = await _make_agent(client)
-        res = await client.put(f"/api/v1/agents/{agent_id}/skills",
-                               json={"skills": [
-                                   {"name": "search", "description": "web search", "enabled": True},
-                                   {"name": "calc",   "description": "calculator",  "enabled": False},
-                               ]},
-                               headers={"Authorization": "Bearer test"})
-        assert res.status_code == 200
-        skills = res.json()["skills"]
-        assert len(skills) == 2
-        assert skills[0]["name"] == "search"
-        assert skills[1]["enabled"] is False
-
-    async def test_clear_skills(self, client):
-        agent_id = await _make_agent(client)
-        await client.put(f"/api/v1/agents/{agent_id}/skills",
-                         json={"skills": [{"name": "old-skill"}]},
-                         headers={"Authorization": "Bearer test"})
-        res = await client.put(f"/api/v1/agents/{agent_id}/skills",
-                               json={"skills": []},
-                               headers={"Authorization": "Bearer test"})
-        assert res.status_code == 200
-        assert res.json()["skills"] == []
-
-    async def test_update_skills_nonexistent_agent(self, client):
-        res = await client.put(f"/api/v1/agents/{uuid.uuid4()}/skills",
-                               json={"skills": []},
-                               headers={"Authorization": "Bearer test"})
         assert res.status_code == 404
 
 
