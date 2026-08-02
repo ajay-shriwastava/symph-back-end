@@ -1,6 +1,5 @@
 """
 Integration tests for agent config endpoints:
-  - /api/v1/agents/{id}/schedules
   - /api/v1/agents/{id}/interaction-rules
   - /api/v1/agents/{id}/guardrails
 """
@@ -13,93 +12,6 @@ async def _make_agent(client):
                             headers={"Authorization": "Bearer test"})
     assert res.status_code == 201
     return res.json()["id"]
-
-
-# ---------------------------------------------------------------------------
-# Schedules
-# ---------------------------------------------------------------------------
-
-class TestSchedules:
-    async def test_create_schedule(self, client):
-        agent_id = await _make_agent(client)
-        res = await client.post(f"/api/v1/agents/{agent_id}/schedules",
-                                json={"label": "daily", "cron_expression": "0 9 * * *"},
-                                headers={"Authorization": "Bearer test"})
-        assert res.status_code == 201
-        data = res.json()
-        assert data["label"] == "daily"
-        assert data["cron_expression"] == "0 9 * * *"
-        assert data["enabled"] is True
-        assert data["agent_id"] == agent_id
-
-    async def test_create_schedule_nonexistent_agent(self, client):
-        res = await client.post(f"/api/v1/agents/{uuid.uuid4()}/schedules",
-                                json={"label": "x", "cron_expression": "0 9 * * *"},
-                                headers={"Authorization": "Bearer test"})
-        assert res.status_code == 404
-
-    async def test_create_schedule_missing_fields(self, client):
-        agent_id = await _make_agent(client)
-        res = await client.post(f"/api/v1/agents/{agent_id}/schedules",
-                                json={"label": "no-cron"},
-                                headers={"Authorization": "Bearer test"})
-        assert res.status_code == 422
-
-    async def test_list_schedules(self, client):
-        agent_id = await _make_agent(client)
-        await client.post(f"/api/v1/agents/{agent_id}/schedules",
-                          json={"label": "s1", "cron_expression": "0 9 * * *"},
-                          headers={"Authorization": "Bearer test"})
-        await client.post(f"/api/v1/agents/{agent_id}/schedules",
-                          json={"label": "s2", "cron_expression": "0 10 * * *"},
-                          headers={"Authorization": "Bearer test"})
-        res = await client.get(f"/api/v1/agents/{agent_id}/schedules",
-                               headers={"Authorization": "Bearer test"})
-        assert res.status_code == 200
-        assert res.json()["total"] == 2
-
-    async def test_update_schedule(self, client):
-        agent_id = await _make_agent(client)
-        sched_res = await client.post(f"/api/v1/agents/{agent_id}/schedules",
-                                      json={"label": "original", "cron_expression": "0 9 * * *"},
-                                      headers={"Authorization": "Bearer test"})
-        sched_id = sched_res.json()["id"]
-
-        res = await client.put(f"/api/v1/agents/{agent_id}/schedules/{sched_id}",
-                               json={"label": "updated", "enabled": False},
-                               headers={"Authorization": "Bearer test"})
-        assert res.status_code == 200
-        assert res.json()["label"] == "updated"
-        assert res.json()["enabled"] is False
-        assert res.json()["cron_expression"] == "0 9 * * *"  # unchanged
-
-    async def test_update_nonexistent_schedule(self, client):
-        agent_id = await _make_agent(client)
-        res = await client.put(f"/api/v1/agents/{agent_id}/schedules/{uuid.uuid4()}",
-                               json={"label": "x"},
-                               headers={"Authorization": "Bearer test"})
-        assert res.status_code == 404
-
-    async def test_delete_schedule(self, client):
-        agent_id = await _make_agent(client)
-        sched_res = await client.post(f"/api/v1/agents/{agent_id}/schedules",
-                                      json={"label": "del-me", "cron_expression": "* * * * *"},
-                                      headers={"Authorization": "Bearer test"})
-        sched_id = sched_res.json()["id"]
-
-        res = await client.delete(f"/api/v1/agents/{agent_id}/schedules/{sched_id}",
-                                  headers={"Authorization": "Bearer test"})
-        assert res.status_code == 204
-
-        res = await client.get(f"/api/v1/agents/{agent_id}/schedules",
-                               headers={"Authorization": "Bearer test"})
-        assert res.json()["total"] == 0
-
-    async def test_delete_nonexistent_schedule(self, client):
-        agent_id = await _make_agent(client)
-        res = await client.delete(f"/api/v1/agents/{agent_id}/schedules/{uuid.uuid4()}",
-                                  headers={"Authorization": "Bearer test"})
-        assert res.status_code == 404
 
 
 # ---------------------------------------------------------------------------

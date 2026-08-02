@@ -49,37 +49,6 @@ class AgentListOut(BaseModel):
     limit: int
 
 
-# ── Schedule schemas ──────────────────────────────────────────────────────────
-
-class ScheduleCreate(BaseModel):
-    label: str = Field(..., max_length=255)
-    cron_expression: str = Field(..., max_length=100)
-    enabled: bool = True
-
-
-class ScheduleUpdate(BaseModel):
-    label: Optional[str] = Field(default=None, max_length=255)
-    cron_expression: Optional[str] = Field(default=None, max_length=100)
-    enabled: Optional[bool] = None
-
-
-class ScheduleOut(BaseModel):
-    id: UUID
-    agent_id: UUID
-    label: str
-    cron_expression: str
-    enabled: bool
-    created_at: datetime
-    updated_at: Optional[datetime]
-
-    model_config = {"from_attributes": True}
-
-
-class ScheduleListOut(BaseModel):
-    items: List[ScheduleOut]
-    total: int
-
-
 # ── Interaction rules schemas ─────────────────────────────────────────────────
 
 class InteractionRules(BaseModel):

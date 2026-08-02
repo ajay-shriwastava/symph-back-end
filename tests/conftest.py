@@ -59,7 +59,7 @@ async def clean_tables():
         async with _test_engine.begin() as conn:
             await conn.execute(
                 sqlalchemy.text(
-                    "TRUNCATE TABLE agent_schedules, agent_memory, messages, logs, "
+                    "TRUNCATE TABLE agent_memory, messages, logs, "
                     "workflow_runs, workflows, agents RESTART IDENTITY CASCADE"
                 )
             )

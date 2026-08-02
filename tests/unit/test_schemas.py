@@ -12,7 +12,6 @@ from app.schemas.agent import (
     AgentInteractionRulesUpdate,
     Guardrails,
     InteractionRules,
-    ScheduleCreate,
 )
 from app.schemas.message import MessageCreate
 from app.schemas.log import LogCreate
@@ -183,22 +182,5 @@ class TestGuardrailsSchema:
         with pytest.raises(ValidationError):
             Guardrails(max_tokens_per_response=32769)
 
-
-# ---------------------------------------------------------------------------
-# ScheduleCreate validation
-# ---------------------------------------------------------------------------
-
-class TestScheduleCreateSchema:
-    def test_valid(self):
-        s = ScheduleCreate(label="daily", cron_expression="0 9 * * *")
-        assert s.enabled is True
-
-    def test_label_required(self):
-        with pytest.raises(ValidationError):
-            ScheduleCreate(cron_expression="0 9 * * *")
-
-    def test_cron_required(self):
-        with pytest.raises(ValidationError):
-            ScheduleCreate(label="daily")
 
 
