@@ -1,8 +1,10 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+MessageLogLevel = Optional[Literal["MINIMAL", "STANDARD", "VERBOSE"]]
 
 
 class AgentCreate(BaseModel):
@@ -13,6 +15,7 @@ class AgentCreate(BaseModel):
     tools: List[str] = Field(default_factory=list)
     channels: List[str] = Field(default_factory=list)
     memory_enabled: bool = False
+    message_log_level: MessageLogLevel = None
 
 
 class AgentUpdate(BaseModel):
@@ -23,6 +26,7 @@ class AgentUpdate(BaseModel):
     tools: Optional[List[str]] = None
     channels: Optional[List[str]] = None
     memory_enabled: Optional[bool] = None
+    message_log_level: MessageLogLevel = None
 
 
 class AgentOut(BaseModel):
@@ -36,6 +40,7 @@ class AgentOut(BaseModel):
     memory_enabled: bool
     interaction_rules: Dict[str, Any] = Field(default_factory=dict)
     guardrails: Dict[str, Any] = Field(default_factory=dict)
+    message_log_level: MessageLogLevel = None
     created_at: datetime
     updated_at: Optional[datetime]
 

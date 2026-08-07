@@ -30,6 +30,34 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Message log level
+# ---------------------------------------------------------------------------
+
+_LEVEL_RANK: dict[str, int] = {"MINIMAL": 0, "STANDARD": 1, "VERBOSE": 2}
+
+
+def _effective_log_level(agent_obj) -> str:
+    """Return effective log level: max(env floor, agent-level setting).
+
+    Never raises. Unknown values fall back to MINIMAL.
+    """
+    floor = os.environ.get("MESSAGE_LOG_LEVEL", "MINIMAL").upper()
+    if floor not in _LEVEL_RANK:
+        floor = "MINIMAL"
+    agent_level: str | None = None
+    if agent_obj is not None:
+        agent_level = (
+            agent_obj.message_log_level
+            if hasattr(agent_obj, "message_log_level")
+            else (agent_obj.get("message_log_level") if isinstance(agent_obj, dict) else None)
+        )
+    if agent_level and agent_level.upper() in _LEVEL_RANK:
+        agent_level = agent_level.upper()
+        return agent_level if _LEVEL_RANK[agent_level] > _LEVEL_RANK[floor] else floor
+    return floor
+
+
+# ---------------------------------------------------------------------------
 # Pricing (per million tokens: input_rate, output_rate in USD)
 # ---------------------------------------------------------------------------
 
@@ -155,6 +183,8 @@ def _make_agent_node(
     agent_id_str: str | None = None,
     agent_obj=None,
     max_loops: int = MAX_LOOPS,
+    next_node_type: str | None = None,
+    next_agent_id: str | None = None,
 ):
     """
     Build an agent node. When agent_obj is provided and has tools configured,
@@ -386,21 +416,80 @@ def _make_agent_node(
             agent_id_str,
         )
 
-        # Persist agent-to-agent handoff message
+        # Persist message roles for this node (fire-and-forget).
+        # Effective log level gates which roles are written:
+        #   MINIMAL  → role=agent only
+        #   STANDARD → role=user + role=agent
+        #   VERBOSE  → role=system + role=user + role=assistant/tool + role=agent
         if agent_id_str:
             try:
                 from app.database import AsyncSessionLocal
                 from app.models.message import Message as MessageModel
+                _eff_level = _effective_log_level(agent_obj)
+                _eff_rank = _LEVEL_RANK[_eff_level]
                 async with AsyncSessionLocal() as _db:
+                    # 1. system — VERBOSE only
+                    if _eff_rank >= _LEVEL_RANK["VERBOSE"]:
+                        _db.add(MessageModel(
+                            agent_id=uuid.UUID(agent_id_str),
+                            session_id=uuid.UUID(run_id),
+                            role="system",
+                            content=resolved_system,
+                            destination_type=None,
+                            destination_ref=None,
+                        ))
+                    # 2. user — STANDARD and above
+                    if _eff_rank >= _LEVEL_RANK["STANDARD"]:
+                        _db.add(MessageModel(
+                            agent_id=uuid.UUID(agent_id_str),
+                            session_id=uuid.UUID(run_id),
+                            role="user",
+                            content=str(user_input),
+                            destination_type=None,
+                            destination_ref=None,
+                        ))
+                    # 3. assistant/tool — VERBOSE only
+                    if _eff_rank >= _LEVEL_RANK["VERBOSE"]:
+                        if bound_tools and _input_rejected is None:
+                            from langchain_core.messages import ToolMessage
+                            for _tm in react_result.get("messages", []):
+                                if isinstance(_tm, ToolMessage):
+                                    _db.add(MessageModel(
+                                        agent_id=uuid.UUID(agent_id_str),
+                                        session_id=uuid.UUID(run_id),
+                                        role="tool",
+                                        content=str(_tm.content),
+                                        destination_type="agent",
+                                        destination_ref=None,
+                                    ))
+                        else:
+                            if _input_rejected is None:
+                                _db.add(MessageModel(
+                                    agent_id=uuid.UUID(agent_id_str),
+                                    session_id=uuid.UUID(run_id),
+                                    role="assistant",
+                                    content=text,
+                                    destination_type="agent",
+                                    destination_ref=None,
+                                ))
+                    # 4. agent — always persisted (minimum at every level)
+                    if next_node_type == "agent" and next_agent_id:
+                        _agent_dest_type = "agent"
+                        _agent_dest_ref = next_agent_id
+                    else:
+                        _agent_dest_type = "display"
+                        _agent_dest_ref = None
                     _db.add(MessageModel(
                         agent_id=uuid.UUID(agent_id_str),
                         session_id=uuid.UUID(run_id),
                         role="agent",
                         content=text,
+                        destination_type=_agent_dest_type,
+                        destination_ref=_agent_dest_ref,
                     ))
                     await _db.commit()
             except Exception as _exc:
-                logger.warning("Could not persist agent handoff message: %s", _exc)
+                logger.warning("Could not persist messages for node '%s': %s", node_id, _exc)
 
         new_messages = list(history) + [text]
         loop_count = state.get("loop_count", 0) + 1
@@ -542,12 +631,25 @@ class WorkflowRunner:
                     ) or ""
                     if agent_model and not node.get("model"):
                         model_id = agent_model
+                # Compute next-node type and agent_id for destination routing
+                _next_node_type: str | None = None
+                _next_agent_id: str | None = None
+                _node_out = out_edges.get(nid, [])
+                if _node_out:
+                    _next_nid = _node_out[0]["to"]
+                    _next_node = node_map.get(_next_nid, {})
+                    _next_node_type = _next_node.get("type")
+                    if _next_node_type == "agent":
+                        _next_agent_id = str(_next_node.get("agent_id", "")) or None
+
                 graph.add_node(nid, _make_agent_node(
                     nid, system_prompt, model_id, run_id,
                     workflow_id=workflow_id,
                     agent_id_str=str(agent_id) if agent_id else None,
                     agent_obj=agent_obj,
                     max_loops=max_loops,
+                    next_node_type=_next_node_type,
+                    next_agent_id=_next_agent_id,
                 ))
             elif ntype == "condition":
                 graph.add_node(nid, _make_condition_node(nid, run_id))

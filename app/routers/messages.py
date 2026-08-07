@@ -36,7 +36,7 @@ async def list_messages(
         count_q = count_q.where(Message.role == role)
     total = (await db.execute(count_q)).scalar_one()
     rows = (
-        await db.execute(q.order_by(Message.created_at).offset(skip).limit(limit))
+        await db.execute(q.order_by(Message.created_at.desc()).offset(skip).limit(limit))
     ).scalars().all()
     return MessageListOut(items=rows, total=total, skip=skip, limit=limit)
 
