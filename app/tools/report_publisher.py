@@ -12,11 +12,12 @@ import time
 
 from langchain_core.tools import tool
 
+from app.tools.tool_context import tool_config as _tool_config_var
+
 logger = logging.getLogger(__name__)
 
 SLACK_REPORT_CHANNEL = os.environ.get("SLACK_REPORT_CHANNEL", "")
 DATASET_DIR = os.environ.get("DATASET_DIR", "/Users/ajay/tech/symphony/symph-prgm-mgmt/dataset")
-OUTPUT_DIR  = os.path.join(DATASET_DIR, "output")
 
 
 # ---------------------------------------------------------------------------
@@ -37,14 +38,17 @@ async def publish_report(
     slack_channel: Slack channel name (without #). Falls back to SLACK_REPORT_CHANNEL env var.
     write_to_file: set to False for reports that don't need a file (e.g. SRE summaries).
     Returns confirmation of what was published."""
-    channel = slack_channel or SLACK_REPORT_CHANNEL
+    cfg = _tool_config_var.get().get("publish_report", {})
+    dataset_dir = cfg.get("dataset_dir") or DATASET_DIR
+    output_dir = os.path.join(dataset_dir, "output")
+    channel = slack_channel or cfg.get("slack_channel") or SLACK_REPORT_CHANNEL
     ts = time.strftime("%Y%m%d_%H%M%S")
     stem = os.path.splitext(csv_filename)[0] if csv_filename else "report"
 
     report_file_path = None
     if write_to_file:
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        report_file_path = os.path.join(OUTPUT_DIR, f"{stem}_report_{ts}.txt")
+        os.makedirs(output_dir, exist_ok=True)
+        report_file_path = os.path.join(output_dir, f"{stem}_report_{ts}.txt")
         header = (
             f"Data Ingestion Report\n"
             f"{'=' * 60}\n"
@@ -103,12 +107,14 @@ async def run(state: dict) -> dict:
     rows_rejected = state.get("rows_rejected_count", 0)
     duplicates    = state.get("duplicates_count", 0)
     table_name    = state.get("table_name", "")
-    output_dir    = state.get("output_dir")
+    output_dir    = state.get("output_dir") or os.path.join(
+        state.get("dataset_dir") or DATASET_DIR, "output"
+    )
 
     ts   = time.strftime("%Y%m%d_%H%M%S")
     stem = os.path.splitext(csv_filename)[0]
 
-    # Channel: node-level param wins over env var
+    # Channel: state wins over env var
     slack_channel = state.get("slack_channel") or SLACK_REPORT_CHANNEL
     # Allow templates to skip file writing (e.g. SRE report has no output_dir)
     write_report_file = state.get("write_report_file", True)

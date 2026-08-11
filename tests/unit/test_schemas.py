@@ -132,6 +132,24 @@ class TestWorkflowCreateSchema:
         with pytest.raises(ValidationError):
             WorkflowCreate()
 
+    def test_tool_config_defaults_to_empty(self):
+        w = WorkflowCreate(name="wf")
+        assert w.tool_config == {}
+
+    def test_tool_config_accepted(self):
+        w = WorkflowCreate(name="wf", tool_config={"scan_csv": {"dataset_dir": "/tmp"}})
+        assert w.tool_config["scan_csv"]["dataset_dir"] == "/tmp"
+
+
+class TestWorkflowUpdateSchema:
+    def test_tool_config_optional(self):
+        u = WorkflowUpdate()
+        assert u.tool_config is None
+
+    def test_tool_config_patch(self):
+        u = WorkflowUpdate(tool_config={"publish_report": {"slack_channel": "dev"}})
+        assert u.tool_config["publish_report"]["slack_channel"] == "dev"
+
 
 # ---------------------------------------------------------------------------
 # InteractionRules validation

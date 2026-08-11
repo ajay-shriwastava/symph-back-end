@@ -96,6 +96,7 @@ async def instantiate_template(
         graph_definition=graph_def,
         schedule=tmpl.get("schedule"),
         trigger_type=tmpl.get("trigger_type", "cron"),
+        tool_config=tmpl.get("tool_config_defaults", {}),
     )
     db.add(workflow)
     await db.commit()

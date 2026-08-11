@@ -41,6 +41,9 @@ SRE_REPORT_TEMPLATE: dict = {
     ),
     "schedule": None,
     "trigger_type": "message",
+    "tool_config_defaults": {
+        "publish_report": {"slack_channel": "job-summary", "dataset_dir": ""},
+    },
     # agent_configs: list — each entry is mapped to a specific graph node by node_id
     "agent_configs": [
         {

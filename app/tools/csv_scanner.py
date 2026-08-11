@@ -11,16 +11,14 @@ import re
 
 from langchain_core.tools import tool
 
+from app.tools.tool_context import tool_config as _tool_config_var
+
 logger = logging.getLogger(__name__)
 
 DATASET_DIR = os.environ.get(
     "DATASET_DIR",
     "/Users/ajay/tech/symphony/symph-prgm-mgmt/dataset",
 )
-INPUT_DIR     = os.path.join(DATASET_DIR, "input")
-OUTPUT_DIR    = os.path.join(DATASET_DIR, "output")
-ERROR_DIR     = os.path.join(DATASET_DIR, "error")
-PROCESSED_DIR = os.path.join(DATASET_DIR, "processed")
 
 
 # ---------------------------------------------------------------------------
@@ -32,11 +30,14 @@ async def scan_csv() -> str:
     """Scan the dataset input directory for the most recently modified CSV file to process.
     Returns JSON with: found (bool), file_path, filename, table_name.
     Call this first in the data ingestion pipeline."""
-    os.makedirs(INPUT_DIR, exist_ok=True)
+    cfg = _tool_config_var.get().get("scan_csv", {})
+    dataset_dir = cfg.get("dataset_dir") or DATASET_DIR
+    input_dir = os.path.join(dataset_dir, "input")
+    os.makedirs(input_dir, exist_ok=True)
     try:
         csv_files = [
-            f for f in os.listdir(INPUT_DIR)
-            if f.lower().endswith(".csv") and os.path.isfile(os.path.join(INPUT_DIR, f))
+            f for f in os.listdir(input_dir)
+            if f.lower().endswith(".csv") and os.path.isfile(os.path.join(input_dir, f))
         ]
     except Exception as exc:
         return json.dumps({"found": False, "error": str(exc)})
@@ -44,9 +45,9 @@ async def scan_csv() -> str:
     if not csv_files:
         return json.dumps({"found": False, "message": "No CSV files found in input directory. Nothing to process."})
 
-    csv_files.sort(key=lambda f: os.path.getmtime(os.path.join(INPUT_DIR, f)), reverse=True)
+    csv_files.sort(key=lambda f: os.path.getmtime(os.path.join(input_dir, f)), reverse=True)
     chosen = csv_files[0]
-    file_path = os.path.join(INPUT_DIR, chosen)
+    file_path = os.path.join(input_dir, chosen)
     stem = os.path.splitext(chosen)[0].lower()
     table_name = re.sub(r"[^a-z0-9_]", "_", stem).strip("_")
     if not table_name or table_name[0].isdigit():
@@ -61,23 +62,29 @@ async def scan_csv() -> str:
 
 
 async def run(state: dict) -> dict:
-    os.makedirs(INPUT_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(ERROR_DIR, exist_ok=True)
-    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    dataset_dir = state.get("dataset_dir") or DATASET_DIR
+    input_dir = os.path.join(dataset_dir, "input")
+    output_dir = os.path.join(dataset_dir, "output")
+    error_dir = os.path.join(dataset_dir, "error")
+    processed_dir = os.path.join(dataset_dir, "processed")
+
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(error_dir, exist_ok=True)
+    os.makedirs(processed_dir, exist_ok=True)
 
     try:
         csv_files = [
             f
-            for f in os.listdir(INPUT_DIR)
-            if f.lower().endswith(".csv") and os.path.isfile(os.path.join(INPUT_DIR, f))
+            for f in os.listdir(input_dir)
+            if f.lower().endswith(".csv") and os.path.isfile(os.path.join(input_dir, f))
         ]
     except Exception as exc:
-        logger.error("Error scanning input dir %s: %s", INPUT_DIR, exc)
+        logger.error("Error scanning input dir %s: %s", input_dir, exc)
         return {**state, "condition_result": False, "csv_file_path": None}
 
     if not csv_files:
-        logger.info("No CSV files found in %s", INPUT_DIR)
+        logger.info("No CSV files found in %s", input_dir)
         return {
             **state,
             "condition_result": False,
@@ -87,11 +94,11 @@ async def run(state: dict) -> dict:
 
     # Pick the most recently modified file
     csv_files.sort(
-        key=lambda f: os.path.getmtime(os.path.join(INPUT_DIR, f)),
+        key=lambda f: os.path.getmtime(os.path.join(input_dir, f)),
         reverse=True,
     )
     chosen = csv_files[0]
-    file_path = os.path.join(INPUT_DIR, chosen)
+    file_path = os.path.join(input_dir, chosen)
 
     # Derive a safe PostgreSQL table name from the filename
     stem = os.path.splitext(chosen)[0].lower()
@@ -107,8 +114,8 @@ async def run(state: dict) -> dict:
         "csv_file_path": file_path,
         "csv_filename": chosen,
         "table_name": table_name,
-        "output_dir": OUTPUT_DIR,
-        "error_dir": ERROR_DIR,
-        "processed_dir": PROCESSED_DIR,
+        "output_dir": output_dir,
+        "error_dir": error_dir,
+        "processed_dir": processed_dir,
         "messages": list(state.get("messages", [])) + [f"Found CSV file: {chosen} → table: {table_name}"],
     }

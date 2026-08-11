@@ -94,6 +94,10 @@ PORTFOLIO_RECO_TEMPLATE: dict = {
     ),
     "schedule":     None,
     "trigger_type": "message",
+    "tool_config_defaults": {
+        "product_universe_filter": {"catalogue_path": ""},
+        "publish_rm_alert":        {"slack_channel": "portfolio-reco"},
+    },
 
     "agent_configs": [
         {

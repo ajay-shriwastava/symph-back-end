@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.workflow_runner import WorkflowRunner, MAX_LOOPS, _estimate_cost
+from app.workflow_runner import WorkflowRunner, MAX_LOOPS, _estimate_cost, run_workflow
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +114,25 @@ class TestWorkflowRunnerCompile:
         compiled = WorkflowRunner.compile(graph, {}, run_id)
         assert compiled is not None
 
+    def test_compile_accepts_tool_config(self):
+        """compile() accepts a tool_config dict without raising."""
+        run_id = self._run_id()
+        tool_config = {"collect_job_stats": {"dataset_dir": "/tmp"}}
+        graph = {
+            "nodes": [
+                {"id": "start", "type": "start", "label": "Start", "x": 0,   "y": 0},
+                {"id": "tool1", "type": "tool",  "label": "Tool",  "x": 100, "y": 0,
+                 "tool_name": "collect_job_stats"},
+                {"id": "end",   "type": "end",   "label": "End",   "x": 200, "y": 0},
+            ],
+            "edges": [
+                {"id": "e1", "from": "start", "to": "tool1"},
+                {"id": "e2", "from": "tool1", "to": "end"},
+            ],
+        }
+        compiled = WorkflowRunner.compile(graph, {}, run_id, tool_config=tool_config)
+        assert compiled is not None
+
 
 # ---------------------------------------------------------------------------
 # run_workflow — mocked LLM, real graph engine, simple start→end graph
@@ -161,6 +180,34 @@ class TestRunWorkflow:
 
         assert mock_run.status == "completed"
         assert mock_db.commit.called
+
+    @pytest.mark.asyncio
+    async def test_tool_config_passed_through_run_workflow(self):
+        """run_workflow accepts tool_config kwarg and completes without error."""
+        run_id = str(uuid.uuid4())
+        workflow_id = str(uuid.uuid4())
+
+        mock_db = AsyncMock()
+        mock_run = MagicMock()
+        mock_run.status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_run
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        with patch("app.workflow_runner._write_log", AsyncMock()):
+            with patch("app.workflow_runner._broadcast", AsyncMock()):
+                await run_workflow(
+                    run_id=run_id,
+                    workflow_id=workflow_id,
+                    graph_definition=self._start_end_graph(),
+                    agents_map={},
+                    input_data={},
+                    db=mock_db,
+                    tool_config={"scan_csv": {"dataset_dir": "/custom/data"}},
+                )
+
+        assert mock_run.status == "completed"
 
     @pytest.mark.asyncio
     async def test_run_not_found_returns_early(self):

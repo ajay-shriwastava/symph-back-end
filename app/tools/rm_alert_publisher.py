@@ -13,6 +13,8 @@ import os
 
 from langchain_core.tools import tool
 
+from app.tools.tool_context import tool_config as _tool_config_var
+
 logger = logging.getLogger(__name__)
 
 SLACK_REPORT_CHANNEL = os.environ.get("SLACK_REPORT_CHANNEL", "portfolio-reco")
@@ -50,7 +52,8 @@ async def publish_rm_alert(
     slack_channel: target channel name without # (defaults to SLACK_REPORT_CHANNEL env var).
     event_title: header for the Slack message.
     Returns: confirmation string indicating what was posted."""
-    channel   = slack_channel or SLACK_REPORT_CHANNEL
+    cfg = _tool_config_var.get().get("publish_rm_alert", {})
+    channel = slack_channel or cfg.get("slack_channel") or SLACK_REPORT_CHANNEL
     bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
 
     if not bot_token:

@@ -136,6 +136,40 @@ class TestUpdateWorkflow:
         assert res.status_code == 404
 
 
+class TestToolConfigOnWorkflow:
+    async def test_tool_config_defaults_to_empty(self, client):
+        wf = await _make_workflow(client)
+        assert wf["tool_config"] == {}
+
+    async def test_create_workflow_with_tool_config(self, client):
+        payload = {**WF_PAYLOAD, "tool_config": {"scan_csv": {"dataset_dir": "/data"}}}
+        res = await client.post("/api/v1/workflows", json=payload,
+                                headers={"Authorization": "Bearer test"})
+        assert res.status_code == 201
+        assert res.json()["tool_config"]["scan_csv"]["dataset_dir"] == "/data"
+
+    async def test_update_tool_config(self, client):
+        wf = await _make_workflow(client)
+        res = await client.put(
+            f"/api/v1/workflows/{wf['id']}",
+            json={"tool_config": {"publish_report": {"slack_channel": "dev-alerts"}}},
+            headers={"Authorization": "Bearer test"},
+        )
+        assert res.status_code == 200
+        assert res.json()["tool_config"]["publish_report"]["slack_channel"] == "dev-alerts"
+
+    async def test_tool_config_persisted_across_get(self, client):
+        wf = await _make_workflow(client)
+        await client.put(
+            f"/api/v1/workflows/{wf['id']}",
+            json={"tool_config": {"scan_csv": {"dataset_dir": "/mnt/data"}}},
+            headers={"Authorization": "Bearer test"},
+        )
+        res = await client.get(f"/api/v1/workflows/{wf['id']}",
+                               headers={"Authorization": "Bearer test"})
+        assert res.json()["tool_config"]["scan_csv"]["dataset_dir"] == "/mnt/data"
+
+
 class TestDeleteWorkflow:
     async def test_delete_returns_204(self, client):
         wf = await _make_workflow(client)

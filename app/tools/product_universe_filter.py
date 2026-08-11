@@ -23,11 +23,14 @@ import re
 logger = logging.getLogger(__name__)
 
 
-def _load_valid_fund_ids() -> set[str]:
-    dataset_dir = os.environ.get("DATASET_DIR", "/Users/ajay/tech/pravar/dataset")
-    path = os.path.join(dataset_dir, "product_catalogue.csv")
+_DEFAULT_DATASET_DIR = os.environ.get("DATASET_DIR", "/Users/ajay/tech/pravar/dataset")
+
+
+def _load_valid_fund_ids(catalogue_path: str | None = None) -> set[str]:
+    if not catalogue_path:
+        catalogue_path = os.path.join(_DEFAULT_DATASET_DIR, "product_catalogue.csv")
     valid: set[str] = set()
-    with open(path, newline="") as f:
+    with open(catalogue_path, newline="") as f:
         for row in csv.DictReader(f):
             valid.add(row["fund_id"].strip())
     return valid
@@ -95,7 +98,11 @@ async def run(state: dict) -> dict:
             "current_output":  msg,
         }
 
-    valid_ids = _load_valid_fund_ids()
+    catalogue_path = state.get("catalogue_path") or os.path.join(
+        state.get("dataset_dir") or _DEFAULT_DATASET_DIR,
+        "product_catalogue.csv",
+    )
+    valid_ids = _load_valid_fund_ids(catalogue_path)
     total_stripped = 0
     filter_log: list[str] = []
 

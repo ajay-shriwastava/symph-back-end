@@ -14,11 +14,11 @@ import time
 
 from langchain_core.tools import tool
 
+from app.tools.tool_context import tool_config as _tool_config_var
+
 logger = logging.getLogger(__name__)
 
 DATASET_DIR   = os.environ.get("DATASET_DIR", "/Users/ajay/tech/symphony/symph-prgm-mgmt/dataset")
-OUTPUT_DIR    = os.path.join(DATASET_DIR, "output")
-ERROR_DIR     = os.path.join(DATASET_DIR, "error")
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +33,11 @@ async def check_data_quality(csv_file_path: str) -> str:
     blank_rows_rejected, error_file, warnings.
     Pass the clean_csv_path to ingest_to_db next."""
     import pandas as pd
+
+    cfg = _tool_config_var.get().get("check_data_quality", {})
+    dataset_dir = cfg.get("dataset_dir") or DATASET_DIR
+    output_dir = os.path.join(dataset_dir, "output")
+    error_dir = os.path.join(dataset_dir, "error")
 
     try:
         df = pd.read_csv(csv_file_path)
@@ -51,8 +56,8 @@ async def check_data_quality(csv_file_path: str) -> str:
     stem = os.path.splitext(os.path.basename(csv_file_path))[0]
     ts = time.strftime("%Y%m%d_%H%M%S")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    clean_path = os.path.join(OUTPUT_DIR, f"{stem}_clean_{ts}.csv")
+    os.makedirs(output_dir, exist_ok=True)
+    clean_path = os.path.join(output_dir, f"{stem}_clean_{ts}.csv")
     clean_df.to_csv(clean_path, index=False)
 
     error_path = None
@@ -64,8 +69,8 @@ async def check_data_quality(csv_file_path: str) -> str:
         dup_rows["_rejection_reason"] = "duplicate"
         blank_rows["_rejection_reason"] = "blank_row"
         err_df = pd.concat([dup_rows, blank_rows], ignore_index=True)
-        os.makedirs(ERROR_DIR, exist_ok=True)
-        error_path = os.path.join(ERROR_DIR, f"{stem}_errors_{ts}.csv")
+        os.makedirs(error_dir, exist_ok=True)
+        error_path = os.path.join(error_dir, f"{stem}_errors_{ts}.csv")
         err_df.to_csv(error_path, index=False)
 
     warnings = [

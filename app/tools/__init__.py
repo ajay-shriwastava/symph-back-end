@@ -52,3 +52,23 @@ CHANNEL_TOOLS: dict[str, list[str]] = {
 
 # All @tool objects as a list (for convenience)
 ALL_TOOLS: list = list(TOOL_REGISTRY.values())
+
+# Configurable parameters per tool (exposed via GET /api/v1/tools/params).
+# Each entry maps a tool name (pipeline or LLM) to its list of param descriptors.
+TOOL_PARAMS: dict[str, list[dict]] = {
+    "csv_scanner":             [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "scan_csv":                [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "data_quality":            [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "check_data_quality":      [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "db_ingestor":             [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "ingest_to_db":            [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "data_profiler":           [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "profile_data":            [{"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "report_publisher":        [{"name": "slack_channel",  "label": "Slack Channel",          "type": "string", "required": False},
+                                {"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "publish_report":          [{"name": "slack_channel",  "label": "Slack Channel",          "type": "string", "required": False},
+                                {"name": "dataset_dir",    "label": "Dataset Directory",      "type": "string", "required": False}],
+    "product_universe_filter": [{"name": "catalogue_path", "label": "Product Catalogue Path", "type": "string", "required": False}],
+    "rm_alert_publisher":      [{"name": "slack_channel",  "label": "Slack Channel",          "type": "string", "required": False}],
+    "publish_rm_alert":        [{"name": "slack_channel",  "label": "Slack Channel",          "type": "string", "required": False}],
+}

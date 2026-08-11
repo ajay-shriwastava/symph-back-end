@@ -99,6 +99,32 @@ class TestInstantiateTemplate:
         assert r1.json()["id"] != r2.json()["id"]
         assert r1.json()["name"] != r2.json()["name"]
 
+    async def test_instantiate_data_ingestion_has_tool_config(self, client):
+        """Instantiated workflow should have tool_config pre-populated from template defaults."""
+        with patch("app.scheduler.register_workflow", AsyncMock()):
+            res = await client.post(
+                "/api/v1/templates/data-ingestion-pipeline/instantiate",
+                headers={"Authorization": "Bearer test"},
+            )
+        data = res.json()
+        assert "tool_config" in data
+        tc = data["tool_config"]
+        assert "scan_csv" in tc
+        assert "dataset_dir" in tc["scan_csv"]
+        assert "publish_report" in tc
+        assert tc["publish_report"]["slack_channel"] == "data-reports"
+
+    async def test_instantiate_portfolio_reco_has_tool_config(self, client):
+        with patch("app.scheduler.register_workflow", AsyncMock()):
+            res = await client.post(
+                "/api/v1/templates/portfolio-recommendation/instantiate",
+                headers={"Authorization": "Bearer test"},
+            )
+        data = res.json()
+        tc = data["tool_config"]
+        assert tc["publish_rm_alert"]["slack_channel"] == "portfolio-reco"
+        assert "product_universe_filter" in tc
+
     async def test_instantiated_workflow_visible_in_list(self, client):
         with patch("app.scheduler.register_workflow", AsyncMock()):
             await client.post(

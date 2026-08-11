@@ -13,11 +13,11 @@ import time
 
 from langchain_core.tools import tool
 
+from app.tools.tool_context import tool_config as _tool_config_var
+
 logger = logging.getLogger(__name__)
 
 DATASET_DIR   = os.environ.get("DATASET_DIR", "/Users/ajay/tech/symphony/symph-prgm-mgmt/dataset")
-OUTPUT_DIR    = os.path.join(DATASET_DIR, "output")
-PROCESSED_DIR = os.path.join(DATASET_DIR, "processed")
 
 # pandas dtype string → PostgreSQL type
 _DTYPE_MAP: dict[str, str] = {
@@ -54,6 +54,11 @@ async def ingest_to_db(clean_csv_path: str, table_name: str, original_file_path:
     import pandas as pd
     from app.database import AsyncSessionLocal
     from sqlalchemy import text
+
+    cfg = _tool_config_var.get().get("ingest_to_db", {})
+    dataset_dir = cfg.get("dataset_dir") or DATASET_DIR
+    output_dir = os.path.join(dataset_dir, "output")
+    processed_dir = os.path.join(dataset_dir, "processed")
 
     try:
         df = pd.read_csv(clean_csv_path)
@@ -94,7 +99,7 @@ async def ingest_to_db(clean_csv_path: str, table_name: str, original_file_path:
             await db.rollback()
             # Still move original to processed so it isn't retried
             if original_file_path and os.path.isfile(original_file_path):
-                _move_file_to_processed(original_file_path)
+                _move_file_to_processed(original_file_path, processed_dir)
             try:
                 os.remove(clean_csv_path)
             except Exception:
@@ -104,8 +109,8 @@ async def ingest_to_db(clean_csv_path: str, table_name: str, original_file_path:
     # Write ingested rows to a permanent output CSV
     stem = os.path.splitext(os.path.basename(clean_csv_path))[0].replace("_clean_", "_")
     ts = time.strftime("%Y%m%d_%H%M%S")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_path = os.path.join(OUTPUT_DIR, f"{stem}_ingested_{ts}.csv")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{stem}_ingested_{ts}.csv")
     try:
         import csv as csv_mod
         with open(output_path, "w", newline="") as f:
@@ -118,7 +123,7 @@ async def ingest_to_db(clean_csv_path: str, table_name: str, original_file_path:
 
     # Move original to processed
     if original_file_path and os.path.isfile(original_file_path):
-        _move_file_to_processed(original_file_path)
+        _move_file_to_processed(original_file_path, processed_dir)
 
     # Delete the clean staging CSV
     try:
@@ -134,12 +139,13 @@ async def ingest_to_db(clean_csv_path: str, table_name: str, original_file_path:
     })
 
 
-def _move_file_to_processed(file_path: str) -> None:
-    """Move a file to PROCESSED_DIR with a timestamp suffix."""
+def _move_file_to_processed(file_path: str, processed_dir: str | None = None) -> None:
+    """Move a file to processed_dir (or PROCESSED_DIR fallback) with a timestamp suffix."""
     stem = os.path.splitext(os.path.basename(file_path))[0]
-    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    dest_dir = processed_dir or os.path.join(DATASET_DIR, "processed")
+    os.makedirs(dest_dir, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(PROCESSED_DIR, f"{stem}_processed_{ts}.csv")
+    dest = os.path.join(dest_dir, f"{stem}_processed_{ts}.csv")
     try:
         os.rename(file_path, dest)
         logger.info("Moved to processed: %s", dest)

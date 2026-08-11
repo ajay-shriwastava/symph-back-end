@@ -185,6 +185,7 @@ def _make_agent_node(
     max_loops: int = MAX_LOOPS,
     next_node_type: str | None = None,
     next_agent_id: str | None = None,
+    workflow_tool_config: dict | None = None,
 ):
     """
     Build an agent node. When agent_obj is provided and has tools configured,
@@ -375,11 +376,16 @@ def _make_agent_node(
         elif bound_tools:
             from langgraph.prebuilt import create_react_agent
             from langchain_core.messages import AIMessage
+            from app.tools.tool_context import tool_config as _tool_config_var
             react_agent = create_react_agent(llm, bound_tools)
-            react_result = await react_agent.ainvoke(
-                {"messages": messages_in},
-                config={"recursion_limit": max_turns_param * 2},
-            )
+            _tc_token = _tool_config_var.set(workflow_tool_config or {})
+            try:
+                react_result = await react_agent.ainvoke(
+                    {"messages": messages_in},
+                    config={"recursion_limit": max_turns_param * 2},
+                )
+            finally:
+                _tool_config_var.reset(_tc_token)
             final_msg = next(
                 (m for m in reversed(react_result["messages"])
                  if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)),
@@ -515,6 +521,7 @@ def _make_tool_node(
     run_id: str,
     workflow_id: str | None = None,
     node_params: dict | None = None,
+    workflow_tool_config: dict | None = None,
 ):
     async def tool_node(state: dict) -> dict:
         await _broadcast(run_id, {"event": "node_enter", "node_id": node_id, "ts": _now_iso()})
@@ -525,9 +532,9 @@ def _make_tool_node(
         if not tool_fn:
             raise ValueError(f"Unknown pipeline tool: '{tool_name}'")
 
-        # Node-level params (e.g. slack_channel) are injected into state
-        # but do not override values already set by upstream nodes
-        merged = {**(node_params or {}), **state}
+        # Merge order: workflow tool_config (baseline) → node params → state (wins)
+        tool_cfg = (workflow_tool_config or {}).get(tool_name, {})
+        merged = {**tool_cfg, **(node_params or {}), **state}
         new_state = await tool_fn(merged)
 
         await _broadcast(run_id, {
@@ -571,6 +578,7 @@ class WorkflowRunner:
         agents_map: Dict[str, Any],
         run_id: str,
         workflow_id: str | None = None,
+        tool_config: dict | None = None,
     ) -> StateGraph:
         """
         Compile graph_definition into a LangGraph StateGraph.
@@ -610,7 +618,7 @@ class WorkflowRunner:
             elif ntype == "tool":
                 tool_name = node.get("tool_name", "")
                 node_params = {k: v for k, v in node.items() if k not in _TOOL_NODE_SKIP_KEYS}
-                graph.add_node(nid, _make_tool_node(nid, tool_name, run_id, workflow_id, node_params))
+                graph.add_node(nid, _make_tool_node(nid, tool_name, run_id, workflow_id, node_params, tool_config))
             elif ntype == "agent":
                 agent_id = node.get("agent_id")
                 agent_obj = agents_map.get(str(agent_id)) if agent_id else None
@@ -650,6 +658,7 @@ class WorkflowRunner:
                     max_loops=max_loops,
                     next_node_type=_next_node_type,
                     next_agent_id=_next_agent_id,
+                    workflow_tool_config=tool_config,
                 ))
             elif ntype == "condition":
                 graph.add_node(nid, _make_condition_node(nid, run_id))
@@ -699,6 +708,7 @@ async def run_workflow(
     agents_map: Dict[str, Any],
     input_data: Dict[str, Any],
     db: AsyncSession,
+    tool_config: dict | None = None,
 ) -> None:
     """
     Execute the compiled workflow graph. Updates WorkflowRun record on
@@ -726,7 +736,7 @@ async def run_workflow(
         await _write_log("INFO", f"Workflow run {run_id} started", workflow_id)
 
         max_loops = int(graph_definition.get("max_loops", MAX_LOOPS))
-        compiled = WorkflowRunner.compile(graph_definition, agents_map, run_id, workflow_id)
+        compiled = WorkflowRunner.compile(graph_definition, agents_map, run_id, workflow_id, tool_config)
         app_graph = compiled.compile()
 
         initial_state = {

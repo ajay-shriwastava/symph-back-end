@@ -12,6 +12,7 @@ class WorkflowCreate(BaseModel):
     graph_definition: Dict[str, Any] = Field(default_factory=dict)
     schedule: Optional[str] = Field(default=None, max_length=100)
     trigger_type: str = Field(default="cron", max_length=20)
+    tool_config: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
 class WorkflowUpdate(BaseModel):
@@ -21,6 +22,7 @@ class WorkflowUpdate(BaseModel):
     graph_definition: Optional[Dict[str, Any]] = None
     schedule: Optional[str] = Field(default=None, max_length=100)
     trigger_type: Optional[str] = Field(default=None, max_length=20)
+    tool_config: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class WorkflowOut(BaseModel):
@@ -31,6 +33,7 @@ class WorkflowOut(BaseModel):
     graph_definition: Dict[str, Any]
     schedule: Optional[str]
     trigger_type: str
+    tool_config: Dict[str, Dict[str, Any]]
     created_at: datetime
     updated_at: Optional[datetime]
 

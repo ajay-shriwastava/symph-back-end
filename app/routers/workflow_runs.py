@@ -81,6 +81,7 @@ async def start_run(
                 agents_map=agents_map,
                 input_data=body.input or {},
                 db=bg_db,
+                tool_config=workflow.tool_config or {},
             )
 
     asyncio.create_task(_background())

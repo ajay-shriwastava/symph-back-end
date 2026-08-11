@@ -35,6 +35,18 @@ DATA_INGESTION_TEMPLATE: dict = {
     ),
     "schedule": None,
     "trigger_type": "message",
+    "tool_config_defaults": {
+        "csv_scanner":        {"dataset_dir": ""},
+        "scan_csv":           {"dataset_dir": ""},
+        "data_quality":       {"dataset_dir": ""},
+        "check_data_quality": {"dataset_dir": ""},
+        "db_ingestor":        {"dataset_dir": ""},
+        "ingest_to_db":       {"dataset_dir": ""},
+        "data_profiler":      {"dataset_dir": ""},
+        "profile_data":       {"dataset_dir": ""},
+        "report_publisher":   {"slack_channel": "data-reports", "dataset_dir": ""},
+        "publish_report":     {"slack_channel": "data-reports", "dataset_dir": ""},
+    },
     # Agent config — used by instantiation to create the agent in the DB
     "agent_config": {
         "name": "Data Ingestion Agent",
