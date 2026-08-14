@@ -568,6 +568,91 @@ def _condition_router(node_id: str, true_target: str, false_target: str):
 
 
 # ---------------------------------------------------------------------------
+# Human-in-the-loop node factory
+# ---------------------------------------------------------------------------
+
+_HITL_TIMEOUT = 86_400  # 24 hours
+
+
+def _make_human_review_node(node_id: str, run_id: str, workflow_id: str | None, prompt: str):
+    """
+    Pause the workflow and wait for human input via POST /runs/{run_id}/resume.
+
+    Flow:
+      1. Broadcast `human_review_required` with the last agent output as context.
+      2. Set run status → `awaiting_review`.
+      3. Await an asyncio.Event (registered in app.hitl).
+      4. Inject human input into state as a new message.
+      5. Set run status → `running` and broadcast `human_review_completed`.
+    """
+    async def human_review_node(state: dict) -> dict:
+        import asyncio as _asyncio
+        from app.hitl import register, cleanup
+        from app.models.workflow_run import WorkflowRun as _WFRun
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import select as _sa_select
+
+        await _broadcast(run_id, {"event": "node_enter", "node_id": node_id, "ts": _now_iso()})
+
+        # Surface the last agent output as context for the reviewer
+        messages = state.get("messages", [])
+        context = messages[-1] if messages else (state.get("current_output") or "")
+        review_prompt = prompt or "Please review the output above and provide feedback or approval to continue."
+
+        # Mark run as awaiting review
+        async with AsyncSessionLocal() as db:
+            run_obj = (
+                await db.execute(_sa_select(_WFRun).where(_WFRun.id == uuid.UUID(run_id)))
+            ).scalar_one_or_none()
+            if run_obj:
+                run_obj.status = "awaiting_review"
+                await db.commit()
+
+        await _broadcast(run_id, {
+            "event": "human_review_required",
+            "node_id": node_id,
+            "prompt": review_prompt,
+            "context": str(context),
+            "ts": _now_iso(),
+        })
+
+        # Pause until /resume fires the event
+        event, holder = register(run_id)
+        try:
+            await _asyncio.wait_for(event.wait(), timeout=_HITL_TIMEOUT)
+        except _asyncio.TimeoutError:
+            cleanup(run_id)
+            await _broadcast(run_id, {"event": "run_error", "error": f"Human review timed out for node '{node_id}'", "ts": _now_iso()})
+            raise RuntimeError(f"Human review timed out after 24 h for node '{node_id}'")
+        finally:
+            cleanup(run_id)
+
+        human_input = holder[0] if holder else ""
+
+        # Resume run
+        async with AsyncSessionLocal() as db:
+            run_obj = (
+                await db.execute(_sa_select(_WFRun).where(_WFRun.id == uuid.UUID(run_id)))
+            ).scalar_one_or_none()
+            if run_obj:
+                run_obj.status = "running"
+                await db.commit()
+
+        await _broadcast(run_id, {
+            "event": "human_review_completed",
+            "node_id": node_id,
+            "human_input": human_input,
+            "ts": _now_iso(),
+        })
+        await _broadcast(run_id, {"event": "node_complete", "node_id": node_id, "output": {}, "ts": _now_iso()})
+
+        new_messages = list(messages) + [human_input]
+        return {**state, "messages": new_messages, "current_output": human_input}
+
+    return human_review_node
+
+
+# ---------------------------------------------------------------------------
 # WorkflowRunner
 # ---------------------------------------------------------------------------
 
@@ -662,6 +747,9 @@ class WorkflowRunner:
                 ))
             elif ntype == "condition":
                 graph.add_node(nid, _make_condition_node(nid, run_id))
+            elif ntype == "human_review":
+                review_prompt = node.get("prompt", "")
+                graph.add_node(nid, _make_human_review_node(nid, run_id, workflow_id, review_prompt))
 
         # Register edges
         for node in nodes:

@@ -29,3 +29,7 @@ class WorkflowRunListOut(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class WorkflowRunResume(BaseModel):
+    human_input: str

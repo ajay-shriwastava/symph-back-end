@@ -10,7 +10,7 @@ from app.dependencies import get_current_user
 from app.models.agent import Agent
 from app.models.workflow import Workflow
 from app.models.workflow_run import WorkflowRun
-from app.schemas.workflow_run import WorkflowRunCreate, WorkflowRunListOut, WorkflowRunOut
+from app.schemas.workflow_run import WorkflowRunCreate, WorkflowRunListOut, WorkflowRunOut, WorkflowRunResume
 from app.ws_manager import manager
 
 # REST routes live under /api/v1/workflows
@@ -137,6 +137,48 @@ async def get_run(
     ).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+# ---------------------------------------------------------------------------
+# Human-in-the-loop resume endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{workflow_id}/runs/{run_id}/resume",
+    response_model=WorkflowRunOut,
+)
+async def resume_run(
+    workflow_id: uuid.UUID,
+    run_id: uuid.UUID,
+    body: WorkflowRunResume,
+    db: AsyncSession = Depends(get_db),
+    _: dict = Depends(get_current_user),
+):
+    run = (
+        await db.execute(
+            select(WorkflowRun).where(
+                WorkflowRun.id == run_id,
+                WorkflowRun.workflow_id == workflow_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != "awaiting_review":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is not awaiting review (current status: {run.status})",
+        )
+
+    from app.hitl import resume
+    if not resume(str(run_id), body.human_input):
+        raise HTTPException(
+            status_code=409,
+            detail="No pending human review found for this run — it may have timed out",
+        )
+
     return run
 
 
