@@ -98,7 +98,24 @@ tests/
     test_logs_router.py
   unit/
     test_workflow_runner.py
+  eval/
+    judge.py                          ← shared LLM-as-judge helper
+    test_market_signal.py
+    test_rm_writer.py
+    test_sre_pipeline.py
+    test_data_ingestion.py
 ```
+
+### Evaluate pipelines
+
+Eval tests verify LLM output quality for each built-in template — not just that the API works, but that the agent produces correctly formatted and accurate responses. They run separately from the main suite since they make live LLM calls.
+
+```bash
+# Requires ANTHROPIC_API_KEY
+pytest -m eval -v
+```
+
+Each template is tested for **faithfulness** (does the output stay grounded in the source data — no hallucinated fund names, no invented events) and **relevance** (does the response address what was asked with the right structure and specificity). Checks are a mix of regex assertions for format requirements and a Haiku-powered LLM judge for semantic quality. No new dependencies are added — the judge reuses `langchain-anthropic` already in the stack.
 
 ---
 
