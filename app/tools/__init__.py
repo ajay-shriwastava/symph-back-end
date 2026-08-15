@@ -11,6 +11,7 @@ from app.tools.rm_alert_publisher import run as rm_alert_publisher_run, publish_
 from app.tools.email_sender import send_email
 from app.tools.whatsapp_sender import send_whatsapp
 from app.tools.telegram_sender import send_telegram
+from app.tools.retriever import retrieve_context
 
 # Pipeline-node tools (state dict → state dict).
 # Used by type="tool" nodes in graph_definition.
@@ -39,6 +40,7 @@ TOOL_REGISTRY: dict = {
     "send_email":         send_email,
     "send_whatsapp":      send_whatsapp,
     "send_telegram":      send_telegram,
+    "retrieve_context":   retrieve_context,
 }
 
 # Channel name → list of tool names auto-injected when that channel is active.

@@ -653,6 +653,71 @@ def _make_human_review_node(node_id: str, run_id: str, workflow_id: str | None, 
 
 
 # ---------------------------------------------------------------------------
+# RAG node factory
+# ---------------------------------------------------------------------------
+
+def _make_rag_node(node_id: str, run_id: str, workflow_id: str | None, top_k: int = 5):
+    """
+    Retrieve relevant context from the knowledge base and prepend it to the
+    next agent's input. The retrieved context is injected as the last message
+    so the following agent node receives it as its user_input.
+    """
+    async def rag_node(state: dict) -> dict:
+        import json as _json
+        from app.embeddings import embed
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import text as _text
+
+        await _broadcast(run_id, {"event": "node_enter", "node_id": node_id, "ts": _now_iso()})
+
+        # Use the last state message as the retrieval query
+        messages = state.get("messages", [])
+        query = messages[-1] if messages else (state.get("input") or "")
+
+        context_text = ""
+        try:
+            vectors = await embed([str(query)])
+            query_vec = _json.dumps(vectors[0])
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    _text("""
+                        SELECT title, content,
+                               1 - (embedding <=> CAST(:query AS vector)) AS score
+                        FROM knowledge_base
+                        ORDER BY embedding <=> CAST(:query AS vector)
+                        LIMIT :top_k
+                    """),
+                    {"query": query_vec, "top_k": max(1, min(int(top_k), 20))},
+                )
+                rows = result.mappings().all()
+            if rows:
+                parts = [
+                    f"[Source: {r['title']} | relevance: {r['score']:.2f}]\n{r['content']}"
+                    for r in rows
+                ]
+                context_text = "Retrieved context:\n" + "\n---\n".join(parts)
+            else:
+                context_text = "No relevant context found in the knowledge base."
+        except Exception as exc:
+            logger.warning("RAG node '%s' retrieval failed: %s", node_id, exc)
+            context_text = f"Knowledge base retrieval failed: {exc}"
+
+        await _broadcast(run_id, {
+            "event": "node_complete",
+            "node_id": node_id,
+            "output": {"retrieved_chunks": len(rows) if "rows" in dir() else 0},
+            "ts": _now_iso(),
+        })
+        await _write_log("INFO", f"RAG node '{node_id}' retrieved context", workflow_id)
+
+        # Prepend context to the messages so the next agent sees it
+        new_messages = list(messages) + [context_text]
+        return {**state, "messages": new_messages, "current_output": context_text}
+
+    return rag_node
+
+
+# ---------------------------------------------------------------------------
 # WorkflowRunner
 # ---------------------------------------------------------------------------
 
@@ -750,6 +815,9 @@ class WorkflowRunner:
             elif ntype == "human_review":
                 review_prompt = node.get("prompt", "")
                 graph.add_node(nid, _make_human_review_node(nid, run_id, workflow_id, review_prompt))
+            elif ntype == "rag":
+                top_k = int(node.get("top_k", 5))
+                graph.add_node(nid, _make_rag_node(nid, run_id, workflow_id, top_k))
 
         # Register edges
         for node in nodes:

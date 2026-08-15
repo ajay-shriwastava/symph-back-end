@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import agents, logs, messages, workflows
 from app.routers.agent_config import router as agent_config_router
+from app.routers.knowledge import router as knowledge_router
 from app.routers.templates import router as templates_router
 from app.routers.tools import router as tools_router
 from app.routers.workflow_runs import router as workflow_runs_router
@@ -43,6 +44,7 @@ app.add_middleware(
 
 app.include_router(agents.router)
 app.include_router(agent_config_router)
+app.include_router(knowledge_router)
 app.include_router(templates_router)
 app.include_router(tools_router)
 app.include_router(workflows.router)
