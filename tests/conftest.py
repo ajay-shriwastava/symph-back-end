@@ -60,7 +60,7 @@ async def clean_tables():
             await conn.execute(
                 sqlalchemy.text(
                     "TRUNCATE TABLE agent_memory, messages, logs, "
-                    "workflow_runs, workflows, agents RESTART IDENTITY CASCADE"
+                    "workflow_runs, workflows, agents, mcp_audit_log RESTART IDENTITY CASCADE"
                 )
             )
     except Exception:

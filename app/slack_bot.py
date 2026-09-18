@@ -9,11 +9,18 @@ Routes each message to the first agent in the DB that has "slack" in its
 channels list. Falls back to a default system prompt if no agent is found.
 
 Persists every inbound and outbound message to the messages table.
+
+MCP enrichment (when MCP_API_KEY is set):
+  - Injects agent memory into the system prompt via list_memory MCP tool
+  - Injects top-3 relevant knowledge chunks via search_knowledge MCP tool
+  - Parses [REMEMBER key: value] in LLM replies and calls set_memory
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -33,6 +40,91 @@ from app.models.message import Message
 logger = logging.getLogger(__name__)
 
 _slack_client: SocketModeClient | None = None
+
+# Pattern: [REMEMBER key: value]
+_REMEMBER_RE = re.compile(r"\[REMEMBER\s+([^:]+?):\s*(.+?)\]", re.IGNORECASE)
+
+_MCP_URL = "http://localhost:8000/mcp"
+
+
+# ---------------------------------------------------------------------------
+# MCP client helpers (graceful degradation when MCP_API_KEY not set)
+# ---------------------------------------------------------------------------
+
+def _mcp_api_key() -> str | None:
+    return os.environ.get("MCP_API_KEY", "").strip() or None
+
+
+async def _mcp_call(tool_name: str, args: dict) -> dict | list | None:
+    """
+    Call an MCP tool via Streamable HTTP transport.
+    Returns parsed JSON result or None on any error.
+    Falls back gracefully if MCP_API_KEY is absent.
+    """
+    api_key = _mcp_api_key()
+    if not api_key:
+        return None
+
+    try:
+        from fastmcp import Client
+        from fastmcp.client.transports import StreamableHttpTransport
+
+        transport = StreamableHttpTransport(
+            url=_MCP_URL,
+            headers={"X-MCP-API-Key": api_key},
+        )
+        async with Client(transport) as client:
+            result = await client.call_tool(tool_name, args)
+            # FastMCP returns a list of content objects; extract first text item
+            if result and hasattr(result[0], "text"):
+                return json.loads(result[0].text)
+    except Exception as exc:
+        logger.warning("MCP call %s failed: %s", tool_name, exc)
+    return None
+
+
+async def _get_memory_context(agent_id: str, caller_id: str) -> str:
+    """Return formatted memory block for system prompt injection, or empty string."""
+    data = await _mcp_call("list_memory", {"agent_id": agent_id, "caller_id": caller_id})
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return ""
+    lines = "\n".join(f"  {entry['key']}: {entry['value']}" for entry in data)
+    return f"Agent Memory:\n{lines}"
+
+
+async def _get_knowledge_context(user_text: str, caller_id: str) -> str:
+    """Return formatted knowledge block for system prompt injection, or empty string."""
+    data = await _mcp_call("search_knowledge", {"query": user_text, "caller_id": caller_id, "top_k": 3})
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return ""
+    sections = []
+    for chunk in data:
+        sections.append(f"[Source: {chunk.get('title', 'unknown')}]\n{chunk.get('content', '')}")
+    return "Relevant Knowledge:\n" + "\n---\n".join(sections)
+
+
+async def _write_remember_markers(agent_id: str, reply: str, caller_id: str) -> str:
+    """
+    Scan reply for [REMEMBER key: value] markers.
+    For each match, call set_memory via MCP.
+    Return the reply with all markers stripped.
+    """
+    if not _mcp_api_key():
+        return reply
+
+    matches = _REMEMBER_RE.findall(reply)
+    for key, value in matches:
+        key = key.strip()
+        value = value.strip()
+        await _mcp_call("set_memory", {
+            "agent_id": agent_id,
+            "key": key,
+            "value": value,
+            "caller_id": caller_id,
+        })
+
+    cleaned = _REMEMBER_RE.sub("", reply).strip()
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +188,22 @@ async def _find_message_workflow(agent: Agent):
 # LLM call (fallback — no workflow configured)
 # ---------------------------------------------------------------------------
 
-async def _run_agent_direct(agent: Agent | None, user_text: str) -> str:
+async def _run_agent_direct(agent: Agent | None, user_text: str, slack_user_id: str) -> str:
     model_id = (agent.model if agent else None) or "claude-haiku-4-5-20251001"
     system_prompt = (agent.system_prompt if agent else None) or "You are a helpful assistant."
+
+    caller_id = f"slack:{slack_user_id}"
+
+    # MCP enrichment — fetch memory and relevant knowledge
+    if agent:
+        agent_id_str = str(agent.id)
+        memory_ctx, knowledge_ctx = await asyncio.gather(
+            _get_memory_context(agent_id_str, caller_id),
+            _get_knowledge_context(user_text, caller_id),
+        )
+        enrichments = [part for part in [memory_ctx, knowledge_ctx] if part]
+        if enrichments:
+            system_prompt = "\n\n".join([system_prompt] + enrichments)
 
     llm = ChatAnthropic(model=model_id)
     messages = [
@@ -106,7 +211,13 @@ async def _run_agent_direct(agent: Agent | None, user_text: str) -> str:
         HumanMessage(content=user_text),
     ]
     result = await llm.ainvoke(messages)
-    return result.content if hasattr(result, "content") else str(result)
+    reply = result.content if hasattr(result, "content") else str(result)
+
+    # Parse and persist [REMEMBER key: value] markers, then strip them
+    if agent:
+        reply = await _write_remember_markers(str(agent.id), reply, caller_id)
+
+    return reply
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +283,7 @@ async def _handle_event(client: SocketModeClient, req: SocketModeRequest) -> Non
 
     user_text = event.get("text", "").strip()
     channel = event.get("channel", "")
+    slack_user_id = event.get("user", "unknown")
 
     if not user_text or not channel:
         return
@@ -198,7 +310,7 @@ async def _handle_event(client: SocketModeClient, req: SocketModeRequest) -> Non
             logger.info("Routing Slack message to workflow '%s'", workflow.name)
             reply = await _run_via_workflow(workflow, agent, user_text)
         else:
-            reply = await _run_agent_direct(agent, user_text)
+            reply = await _run_agent_direct(agent, user_text, slack_user_id)
     except Exception as exc:
         logger.error("Agent error: %s", exc)
         reply = "Sorry, I encountered an error processing your message."
