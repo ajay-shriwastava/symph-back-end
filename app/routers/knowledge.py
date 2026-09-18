@@ -7,10 +7,12 @@ DELETE /api/v1/knowledge/{id}     — delete a single entry
 POST   /api/v1/knowledge/search   — semantic similarity search
 """
 
+import asyncio
+import io
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,6 +110,92 @@ async def list_knowledge(
             created_at=r.created_at,
         )
         for r in rows
+    ]
+
+
+@router.post("/upload", response_model=list[KnowledgeEntryOut], status_code=201)
+async def upload_document(
+    file: UploadFile,
+    title: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+):
+    """
+    Accept a .pdf or .txt file, extract text, chunk + embed, store in knowledge_base.
+    Returns all created entries.
+    """
+    filename = file.filename or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext not in ("pdf", "txt"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Only .pdf and .txt are accepted.",
+        )
+
+    raw_bytes = await file.read()
+
+    try:
+        if ext == "pdf":
+            from pypdf import PdfReader  # local import — optional dep
+
+            def _extract_pdf(data: bytes) -> str:
+                reader = PdfReader(io.BytesIO(data))
+                return "\n".join(
+                    page.extract_text() or "" for page in reader.pages
+                ).strip()
+
+            text_content = await asyncio.to_thread(_extract_pdf, raw_bytes)
+        else:
+            text_content = raw_bytes.decode("utf-8").strip()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to process file.")
+
+    if not text_content:
+        raise HTTPException(
+            status_code=400,
+            detail="No text could be extracted from the file.",
+        )
+
+    chunks = chunk_text(text_content)
+    vectors = await embed(chunks)
+
+    created: list[KnowledgeEntry] = []
+    for chunk, vector in zip(chunks, vectors):
+        entry_id = uuid.uuid4()
+        await db.execute(
+            text("""
+                INSERT INTO knowledge_base (id, title, content, embedding, metadata_, created_at)
+                VALUES (:id, :title, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb), NOW())
+            """),
+            {
+                "id": str(entry_id),
+                "title": title,
+                "content": chunk,
+                "embedding": json.dumps(vector),
+                "metadata": json.dumps({"source_filename": filename}),
+            },
+        )
+        row = (
+            await db.execute(
+                select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id)
+            )
+        ).scalar_one()
+        created.append(row)
+
+    await db.commit()
+    for row in created:
+        await db.refresh(row)
+
+    return [
+        KnowledgeEntryOut(
+            id=r.id,
+            title=r.title,
+            content=r.content,
+            metadata=r.metadata_,
+            created_at=r.created_at,
+        )
+        for r in created
     ]
 
 
